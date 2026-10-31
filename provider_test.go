@@ -99,7 +99,7 @@ func TestPrepareHTTPIgnoresCallerDestinationsAndCredentials(t *testing.T) {
 }
 
 func TestStaticModelsAreNamespacedAndRegistrarMatches(t *testing.T) {
-	c := catalog{}
+	c := newCatalog(nil)
 	out, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{})
 	if err != nil || len(out.Models) == 0 {
 		t.Fatalf("static models %+v %v", out, err)
@@ -108,16 +108,16 @@ func TestStaticModelsAreNamespacedAndRegistrarMatches(t *testing.T) {
 	if err != nil || len(reg.Models) != len(out.Models) {
 		t.Fatalf("registrar %+v %v", reg, err)
 	}
-	found := false
 	for _, m := range out.Models {
 		if len(m.ID) <= 7 || m.ID[:7] != "nvidia/" {
 			t.Fatalf("unprefixed model %q", m.ID)
 		}
-		if m.ID == "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5" {
-			found = true
+		// Fallbacks must not include IDs the hosted gateway reports as retired
+		// (410 end of life) or undeployed (404) as of the last live check.
+		for _, retired := range []string{"nvidia/meta/llama-3.1-8b-instruct", "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5"} {
+			if m.ID == retired {
+				t.Fatalf("fallback advertises retired model %q", m.ID)
+			}
 		}
-	}
-	if !found {
-		t.Fatal("fallback lost the NVIDIA-owned upstream namespace")
 	}
 }

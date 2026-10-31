@@ -77,8 +77,14 @@ func TestRealHostLoader(t *testing.T) {
 				io.WriteString(w, `{"error":"fixture failure"}`)
 				return
 			}
-			if body["stream"] == true {
-				w.Header().Set("Content-Type", "text/event-stream")
+			if body["stream"] != true {
+				// Non-streaming Execute and catalog probes must always stream upstream.
+				t.Error("upstream received stream=false")
+				w.WriteHeader(http.StatusGatewayTimeout)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			if body["fixture_gate"] == true {
 				io.WriteString(w, "data: {\"id\":\"chat-example\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\n")
 				w.(http.Flusher).Flush()
 				select {
@@ -89,7 +95,7 @@ func TestRealHostLoader(t *testing.T) {
 				io.WriteString(w, "data: [DONE]\n\n")
 				return
 			}
-			io.WriteString(w, `{"id":"chat-example","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`)
+			io.WriteString(w, "data: {\"id\":\"chat-example\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\ndata: [DONE]\n\n")
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			w.WriteHeader(404)
@@ -135,7 +141,7 @@ func TestRealHostLoader(t *testing.T) {
 		t.Fatalf("registration %+v", host.RegisteredPlugins())
 	}
 	info := host.RegisteredPlugins()
-	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.1.0" {
+	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.1.1" {
 		t.Fatalf("metadata %+v", info)
 	}
 	auth, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: "example.json", RawJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-example-key","requests_per_minute":4,"label":"Example"}`)})
@@ -178,6 +184,10 @@ func TestRealHostLoader(t *testing.T) {
 	if !discovered.Handled || len(discovered.Models) != 2 || discovered.Models[1].ID != "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5" {
 		t.Fatalf("discovery %+v", discovered)
 	}
+	// Each discovered model is validated with one real one-token chat probe.
+	if inference.Load() != 2 {
+		t.Fatalf("validation probes %d", inference.Load())
+	}
 	ex, ok := m["nvidia-nim"]
 	if !ok {
 		t.Fatal("executor not registered")
@@ -185,14 +195,15 @@ func TestRealHostLoader(t *testing.T) {
 	req := coreexec.Request{Model: "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5", Payload: []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","messages":[{"role":"user","content":"hello"}]}`), Format: translator.FormatOpenAI}
 	opts := coreexec.Options{SourceFormat: translator.FormatOpenAI, ResponseFormat: translator.FormatOpenAI}
 	resp, err := ex.Execute(ctx, auth, req, opts)
-	if err != nil || !strings.Contains(string(resp.Payload), `"content":"hello"`) {
+	if err != nil || !strings.Contains(string(resp.Payload), `"content":"hello"`) || !strings.Contains(string(resp.Payload), `"object":"chat.completion"`) {
 		t.Fatalf("execute %s %v", resp.Payload, err)
 	}
+	// 2 validation probes + 1 dispatch against a configured capacity of 4.
 	quota, _, err = host.FetchQuota(ctx, quotaReq)
-	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .75 || quota.Groups[0].Buckets[0].ResetTime == "" {
+	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .25 || quota.Groups[0].Buckets[0].ResetTime == "" {
 		t.Fatalf("dispatch accounting %+v %v", quota, err)
 	}
-	req.Payload = []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","stream":true}`)
+	req.Payload = []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","stream":true,"fixture_gate":true}`)
 	opts.Stream = true
 	stream, err := ex.ExecuteStream(ctx, auth, req, opts)
 	if err != nil {
@@ -219,7 +230,7 @@ func TestRealHostLoader(t *testing.T) {
 		t.Fatalf("stream %s", chunks.String())
 	}
 	quota, _, err = host.FetchQuota(ctx, quotaReq)
-	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .5 {
+	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != 0 {
 		t.Fatalf("stream double-count %+v %v", quota, err)
 	}
 	opts.Stream = false
@@ -305,7 +316,7 @@ func TestRegistryUsesNativeStoreSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg, err := pluginstore.ParseRegistry(raw)
-	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.1.0" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
+	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.1.1" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
 		t.Fatalf("registry %+v %v", reg, err)
 	}
 }

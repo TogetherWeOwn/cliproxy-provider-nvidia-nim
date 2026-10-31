@@ -68,30 +68,52 @@ the upstream model itself starts with `nvidia/`.
 
 | Client ID | Upstream ID | Static fallback |
 | --- | --- | --- |
-| `nvidia/meta/llama-3.1-8b-instruct` | `meta/llama-3.1-8b-instruct` | Yes |
-| `nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Yes |
 | `nvidia/stepfun-ai/step-5-preview` | `stepfun-ai/step-5-preview` | Yes |
 | `nvidia/<organization>/<model>` | `<organization>/<model>` | Discovered |
 
 Discovery uses `GET https://integrate.api.nvidia.com/v1/models` with Bearer auth.
-It deduplicates IDs and excludes explicit embedding/reranking IDs; other returned
-IDs are chat candidates, **not proof of chat/tool support, availability, free
-access or production rights**. The static registrar supplies the three fallback
-models above. Discovery falls back to those IDs on transport/server/missing
-catalog errors, malformed/oversized (>1 MiB) JSON, or no usable returned models.
-It propagates 401/402/403/429 and cancellation rather than hiding auth/quota
-failures behind a healthy catalog. Discovery requires host transport.
+That list is a static catalog, **not per-account availability**: in a live check
+on 2026-10-31 it returned 85 IDs for one key, and 60 of them answered the chat
+endpoint with 404 (no function deployed for the account); retired IDs answer
+410 (end of life).
+Discovery therefore deduplicates IDs, excludes explicit embedding/reranking IDs
+and then **validates every candidate** with a one-token streaming chat probe
+(`max_tokens: 1`, cancelled as soon as response headers arrive):
+
+- 403, 404 or 410: the model is not usable by this key and is not advertised.
+- 2xx: usable. Any other outcome (429, 5xx, timeout, transport error) is
+  inconclusive and the model is kept, so a transient upstream problem never
+  empties the catalog.
+- At most 8 probes run at once, each bounded to 5 s, the whole validation to
+  30 s. Definitive verdicts are cached per key digest for 6 h, so hot reloads
+  do not re-probe; inconclusive models are re-probed on the next discovery.
+- Each probe is a real dispatch and is counted on the local RPM card. A full
+  first discovery can therefore use most of a 40 RPM minute.
+
+The static registrar supplies the fallback model above. Discovery falls back to
+it (and validates it) on transport/server/missing catalog errors,
+malformed/oversized (>1 MiB) JSON, or no usable returned models. It propagates
+401/402/403/429 and cancellation rather than hiding auth/quota failures behind a
+healthy catalog. Discovery requires host transport.
 
 Execution sends `POST https://integrate.api.nvidia.com/v1/chat/completions`,
 `Authorization: Bearer <api-key>` and JSON via the **injected host HTTP client**;
 no independent transport bypasses the host's proxy/logging policy. Host-final
-payload fields are preserved except for the single prefix and explicit stream
-mode. `Execute` enforces `stream:false`; `ExecuteStream` enforces `stream:true`.
-Streaming relays SSE incrementally, including `[DONE]`, without aggregating or
-buffering to completion. Raw HTTP calls are constrained to this same endpoint
-and credentials; caller URLs/methods/headers cannot redirect the key. Local token
-counting is the kit's explicitly estimated count, not a model tokenizer or a
-billable NVIDIA operation.
+payload fields are preserved except for the single prefix and the stream mode.
+**Upstream always streams.** Hosted NIM routes `stream:false` through NVCF's
+queued invocation path, which holds the connection up to `NVCF-POLL-SECONDS`
+(300 s by default) and then answers 504 (or 202 pending) with an empty body; on
+2026-10-31 `stepfun-ai/step-5-preview` non-streaming timed out with 504 after
+302 s while the same request streamed in 5 s. `Execute` therefore sends
+`stream:true` and aggregates the SSE (content, reasoning, tool-call fragments,
+usage) into one `chat.completion` JSON document; an upstream that ignores the
+flag and answers `application/json` is passed through after validation. An
+empty, non-JSON or truncated 2xx reply is a retryable 502, never a successful
+empty completion. `ExecuteStream` relays SSE incrementally, including `[DONE]`,
+without buffering to completion. Raw HTTP calls are constrained to this same
+endpoint and credentials; caller URLs/methods/headers cannot redirect the key.
+Local token counting is the kit's explicitly estimated count, not a model
+tokenizer or a billable NVIDIA operation.
 
 ## RPM quota semantics
 
@@ -180,7 +202,7 @@ nm -D <output-dir>/nvidia-nim.so | grep cliproxy_plugin_init
 bash scripts/package-release.sh <output-dir>
 ```
 
-Packaging creates `nvidia-nim_0.1.0_linux_amd64.zip` containing `nvidia-nim.so`
+Packaging creates `nvidia-nim_0.1.1_linux_amd64.zip` containing `nvidia-nim.so`
 and `LICENSE`, plus `checksums.txt`. It checks the C-ABI symbol and rejects
 libraries importing GLIBC versions newer than **2.34** or private GLIBC symbols.
 Publish both files together in the matching release; schema-v1 `registry.json`

@@ -80,10 +80,12 @@ func TestExecutorCountsEachDispatchedRequestAndIgnoresInvalidLocalCalls(t *testi
 			t.Error("incorrect inference wire request")
 		}
 		var body map[string]any
-		if json.NewDecoder(r.Body).Decode(&body) != nil || body["model"] != "nvidia/llama-3.3-nemotron-super-49b-v1.5" || body["stream"] != false {
+		// Non-streaming Execute must still stream upstream (see executor.go).
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body["model"] != "nvidia/llama-3.3-nemotron-super-49b-v1.5" || body["stream"] != true {
 			t.Error("model namespace or mode not rewritten")
 		}
-		io.WriteString(w, `{"id":"chat-example","choices":[{"message":{"content":"hello"}}]}`)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"id\":\"chat-example\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer server.Close()
 	q := newQuotaProvider()
@@ -207,6 +209,11 @@ func TestExecutorErrorClassificationCountsFailedAttempts(t *testing.T) {
 
 func TestDiscoveryPrefixesDeduplicatesAndKeepsUpstreamNvidiaNamespace(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" { // validation probe: every model usable
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
 		if r.Method != "GET" || r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer nvapi-example" {
 			t.Error("bad discovery wire request")
 		}
@@ -231,7 +238,14 @@ func TestDiscoveryFallbackForUnavailableOrInvalidCatalogButNotAuthErrors(t *test
 		{503, `{}`, false}, {404, `{}`, false}, {200, `not-json`, false}, {200, `{"data":[]}`, false}, {200, `{"data":null}`, false}, {401, `{}`, true}, {403, `{}`, true}, {429, `{}`, true},
 	} {
 		t.Run(fmt.Sprint(tc.status)+tc.body, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); io.WriteString(w, tc.body) }))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/chat/completions" { // fallback IDs validate as usable
+					io.WriteString(w, "data: [DONE]\n\n")
+					return
+				}
+				w.WriteHeader(tc.status)
+				io.WriteString(w, tc.body)
+			}))
 			defer server.Close()
 			out, err := (catalog{}).ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
 			if (err != nil) != tc.wantErr || !tc.wantErr && len(out.Models) == 0 {
