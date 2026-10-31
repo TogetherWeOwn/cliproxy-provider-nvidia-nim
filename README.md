@@ -1,0 +1,214 @@
+# NVIDIA NIM provider for CLIProxyAPI
+
+First-class NVIDIA API-key auth files, namespaced OpenAI-compatible chat models,
+incremental streaming and **display-only local requests-per-minute quota cards**.
+Uses the published [`cliproxy-provider-kit` v0.1.0](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
+and the original **CLIProxyAPI v8.0.48 C-ABI host** (ABI 1 / RPC schema 9).
+
+Multiple distinct-key auth files use native round-robin/weighted/fill-first
+routing and native cooldowns. There is **no Scheduler**, local admission gate,
+quota-based account avoidance, purchase, paid fallback or automatic quota reset.
+This is a provider plugin, not the older subscription-pool scheduling overlay.
+
+**Pending live verification.** All verification here uses loopback mocks. No
+NVIDIA inference, model, quota or analytics endpoint was contacted during tests.
+See [migration](docs/MIGRATION.md) and the pinned-host caveat below before cutover.
+
+## Auth files
+
+Create one private JSON auth file per legitimate API key in the host's auth
+directory, mode `0600`. The following is illustrative JSON; replace both
+placeholders locally. `requests_per_minute` is optional (see below).
+Never commit credential files or real account labels.
+
+```json
+{
+  "type": "nvidia-nim",
+  "api_key": "nvapi-<api-key>",
+  "label": "<account-label>",
+  "requests_per_minute": 40,
+  "weight": 1,
+  "priority": 0,
+  "disabled": false
+}
+```
+
+**Default capacity: 40 RPM, unofficial.** The 40 requests-per-minute figure is
+the build.nvidia.com free-tier limit developers report seeing on their account
+(see [docs/SOURCES.md](docs/SOURCES.md)). NVIDIA's
+[official FAQ](https://forums.developer.nvidia.com/t/nvidia-nim-faq/300317)
+publishes **no** fixed number: it says the rate varies per model and with
+concurrent users, and points to the signed-in account page on build.nvidia.com.
+So the plugin uses 40 only when `requests_per_minute` is omitted, and the card
+labels it "Default capacity (unofficial)". Set `requests_per_minute` per auth
+file to the limit your account page shows; the card then reads "Configured
+capacity". The value must be an integer from 1 through 100000. It only affects
+the display; inference is never gated by it.
+Native metadata takes precedence over persisted provider storage.
+
+API keys must begin `nvapi-`; leading/trailing whitespace is trimmed and embedded
+whitespace/control characters are rejected. This only validates shape, not
+entitlement. Auth IDs are `nvidia-nim:` followed by the first 12 SHA-256 hex digits
+of the key. User-supplied `id` is rejected. The same key in two files is rejected;
+reparsing one filename is safe, and changing its key releases the old ownership.
+Filename ownership is in-memory. To rename/delete auth files, disable the plugin
+and re-enable it using native hot configuration reload after moving the file;
+do not copy a still-owned key to a second filename.
+
+Optional native fields include `prefix`, `proxy_url`, `weight`, `priority`,
+`label` and `disabled`. Auth `prefix` does not replace the fixed model namespace.
+Login/poll are API-key-only errors; refresh preserves storage without calling
+NVIDIA and does not renew or rotate keys.
+
+## Models and inference
+
+The fixed **`nvidia/`** prefix applies to every static and discovered model.
+Only one leading prefix is stripped before upstream dispatch, including when
+the upstream model itself starts with `nvidia/`.
+
+| Client ID | Upstream ID | Static fallback |
+| --- | --- | --- |
+| `nvidia/meta/llama-3.1-8b-instruct` | `meta/llama-3.1-8b-instruct` | Yes |
+| `nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Yes |
+| `nvidia/stepfun-ai/step-5-preview` | `stepfun-ai/step-5-preview` | Yes |
+| `nvidia/<organization>/<model>` | `<organization>/<model>` | Discovered |
+
+Discovery uses `GET https://integrate.api.nvidia.com/v1/models` with Bearer auth.
+It deduplicates IDs and excludes explicit embedding/reranking IDs; other returned
+IDs are chat candidates, **not proof of chat/tool support, availability, free
+access or production rights**. The static registrar supplies the three fallback
+models above. Discovery falls back to those IDs on transport/server/missing
+catalog errors, malformed/oversized (>1 MiB) JSON, or no usable returned models.
+It propagates 401/402/403/429 and cancellation rather than hiding auth/quota
+failures behind a healthy catalog. Discovery requires host transport.
+
+Execution sends `POST https://integrate.api.nvidia.com/v1/chat/completions`,
+`Authorization: Bearer <api-key>` and JSON via the **injected host HTTP client**;
+no independent transport bypasses the host's proxy/logging policy. Host-final
+payload fields are preserved except for the single prefix and explicit stream
+mode. `Execute` enforces `stream:false`; `ExecuteStream` enforces `stream:true`.
+Streaming relays SSE incrementally, including `[DONE]`, without aggregating or
+buffering to completion. Raw HTTP calls are constrained to this same endpoint
+and credentials; caller URLs/methods/headers cannot redirect the key. Local token
+counting is the kit's explicitly estimated count, not a model tokenizer or a
+billable NVIDIA operation.
+
+## RPM quota semantics
+
+The quota card is **local observation, not an authoritative NVIDIA balance**:
+
+- One bucket, `window: per-minute`, per key; all models on that key share it.
+- `used` counts executor dispatch attempts in the trailing `(now - 60s, now]`.
+  Normal, streaming and raw-HTTP inference each count once before host dispatch.
+  Failed upstream requests, retries performed as new executor calls and
+  transport failures count conservatively. Invalid local payloads, absent host
+  transport, already-cancelled requests, token counting and model discovery do
+  not count. Completion/usage notifications cannot double-count streams.
+- `capacity` is the auth file's `requests_per_minute`, or the labelled unofficial
+  40 RPM default when it is omitted. Summary metrics
+  expose `requests_used` and `requests_per_minute` because the pinned bucket
+  schema has no numeric capacity/used fields.
+- `remainingFraction = max(0, 1 - used / capacity)`. The used count is not capped:
+  a zero card **never blocks or reroutes inference**.
+- `resetTime` is when the oldest still-counted attempt ages out, **not a full
+  refill**. Empty windows have no reset timestamp. Fetching recomputes immediately
+  without a 60-second response cache or any network call.
+- Counts are isolated by a full SHA-256 key digest, not mutable host auth IDs;
+  keys are not retained in quota state. Expired histories are pruned on access.
+  Reconfiguration of the same plugin runtime preserves its window. A new plugin
+  instance/process loses history and initially observes zero local requests;
+  wait 60 seconds before treating it as a complete observation window.
+- Other clients, other processes, host-internal transport retries, or other keys
+  on the **same NVIDIA account** can consume a shared provider limit and are not
+  visible here. Separate key cards do not imply separate upstream entitlement.
+- No official hosted rate-limit remaining/capacity/reset response headers were
+  documented in the consulted sources. The plugin does not guess `X-RateLimit-*`
+  names. It honors standard `Retry-After` on actual failures, not as a balance.
+- No officially documented hosted credit-balance API was found. There is no
+  fabricated credit/monthly/daily bucket, token-to-credit conversion or reset API.
+
+This is not a billing or entitlement guard. Retain provider-side controls and
+verify the applicable NVIDIA API/model terms before any deployment.
+
+## Failure classification and native cooldowns
+
+Errors expose only fixed safe messages, never keys or upstream bodies.
+
+| Upstream result | RPC classification | Retry hint |
+| --- | --- | --- |
+| 401 / 403 | `invalid_credentials`, non-retryable | None |
+| 402 | `quota_exhausted`, non-retryable | One hour |
+| 404 | `upstream_not_found`, non-retryable | None; not auth exhaustion |
+| Ordinary 429 | `rate_limited`, retryable | Valid `Retry-After`, otherwise 60 seconds |
+| 429 with explicit insufficient/exhausted credits, `insufficient_quota`, or expired/exhausted trial evidence | `quota_exhausted`, non-retryable | Valid `Retry-After`, otherwise one hour |
+| 408 / 5xx | `upstream_error`, retryable | Valid `Retry-After`, if supplied |
+| Other 4xx | `upstream_error`, non-retryable | Upstream timing if supplied |
+
+Retry-After accepts integer seconds or an HTTP date. A missing/invalid/past/zero
+value uses the category default. Explicit exhaustion wording is conservative
+compatibility handling ported from prior art, not a claim that every NVIDIA
+account emits that shape. Generic “request quota per minute exceeded” stays a
+short rate limit. The plugin never latches local exhaustion or rewrites status
+codes to influence routing.
+
+### Verified v8.0.48 RPC limitation
+
+`internal/pluginhost/rpc_client.go` preserves HTTP status and retry timing, but
+not the RPC `retryable` flag or the native transient-rate-limit marker. The real
+host-manager test therefore observes `ModelStates[model].Quota.Exceeded` even
+for a rate-only 429. A seven-second `Retry-After` still produces a short native
+cooldown and rotates to a healthy sibling. This is **not** credit-exhaustion
+parity or a reason to add a Scheduler/status disguise. Native cooldown scope
+and duration remain host policy: 401/402/403 currently use 30-minute model
+cooldowns, and ordinary 404 can cool the model for 12 hours. An upstream RPC
+contract update plus a new pinned-host test is needed to distinguish transient
+markers end to end. No local core patch is supplied.
+
+## Build, test and package
+
+Requires Go **1.26.10**, CGO, a C compiler, `nm`, `objdump`, Python 3 and `zip`.
+No `replace` directives, sibling dependencies, live configuration or provider
+credentials are needed.
+
+```sh
+go vet ./...
+go test -race -count=1 ./...
+go -C integration/hostcompat vet ./...
+go -C integration/hostcompat test -race -count=1 ./...
+CGO_ENABLED=1 go build -trimpath -buildmode=c-shared -o <output-dir>/nvidia-nim.so .
+nm -D <output-dir>/nvidia-nim.so | grep cliproxy_plugin_init
+bash scripts/package-release.sh <output-dir>
+```
+
+Packaging creates `nvidia-nim_0.1.0_linux_amd64.zip` containing `nvidia-nim.so`
+and `LICENSE`, plus `checksums.txt`. It checks the C-ABI symbol and rejects
+libraries importing GLIBC versions newer than **2.34** or private GLIBC symbols.
+Publish both files together in the matching release; schema-v1 `registry.json`
+is release metadata, not evidence that release assets have been published.
+
+CI runs formatting, both modules' vet/race tests, real-loader compatibility,
+release packaging/GLIBC checks, gitleaks and supplemental public-file hygiene.
+The hostcompat-tagged binary accepts **loopback mock upstreams only** and is
+never a production release artifact. Build/test/package scripts do not install,
+reload or restart a service.
+
+## Pending live verification
+
+- Confirm each account's actual free-tier RPM on its build.nvidia.com account
+  page and permitted use; set `requests_per_minute` if it differs from the
+  unofficial 40 RPM default.
+- On a separately authorized staging CLIProxy, verify key entitlement, current
+  model catalog/response schema, and one small stream and non-stream request.
+- Check actual failure status/body and any returned documented rate-limit
+  headers without intentionally exhausting or load-testing an account.
+- Confirm the local card matches observed dispatches, native routing and sibling
+  isolation; explicitly accept or resolve the pinned-host rate-marker limitation.
+- Publish reviewed production artifacts before enabling registry-based install;
+  then follow native hot configuration reload for provider-scoped cutover.
+
+## Sources
+
+- [NVIDIA NIM FAQ: account/model-dependent limits](https://forums.developer.nvidia.com/t/nvidia-nim-faq/300317)
+- [NVIDIA chat wire reference and 402/429 semantics](https://docs.api.nvidia.com/nim/reference/stepfun-ai-step-5-preview-infer)
+- [NVIDIA-hosted model-list endpoint](https://docs.nvidia.com/nim-operator/latest/guardrail.html)
+- [Complete wire/provenance source map](docs/SOURCES.md)
