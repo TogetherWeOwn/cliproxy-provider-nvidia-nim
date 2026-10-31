@@ -66,7 +66,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	defer server.Close()
 	q := newQuotaProvider()
 	c := newCatalog(q)
-	req := pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
+	req := pluginapi.AuthModelRequest{AuthID: "nvidia-nim:example", StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
 	want := "nvidia/ok/alive,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/nvidia/also-alive"
 	start := time.Now()
 	out, err := c.ModelsForAuth(context.Background(), req)
@@ -108,13 +108,12 @@ func TestVerdictCacheExpires(t *testing.T) {
 	c := newVerdictCache()
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	c.now = func() time.Time { return now }
-	var digest [32]byte
-	c.put(digest, "m", false, verdictTTL)
-	if usable, ok := c.get(digest, "m"); !ok || usable {
+	c.put("auth", "m", false, verdictTTL)
+	if usable, ok := c.get("auth", "m"); !ok || usable {
 		t.Fatal("fresh verdict missing")
 	}
 	now = now.Add(verdictTTL)
-	if _, ok := c.get(digest, "m"); ok {
+	if _, ok := c.get("auth", "m"); ok {
 		t.Fatal("expired verdict reused")
 	}
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -69,7 +68,7 @@ func (c catalog) ModelsForAuth(ctx context.Context, r pluginapi.AuthModelRequest
 	if err != nil {
 		return pluginapi.ModelResponse{}, err
 	}
-	models, err := c.validate(ctx, r.HTTPClient, key, candidates)
+	models, err := c.validate(ctx, r.HTTPClient, key, r.AuthID, candidates)
 	if err != nil {
 		return pluginapi.ModelResponse{}, err
 	}
@@ -122,16 +121,22 @@ func discover(ctx context.Context, client pluginapi.HostHTTPClient, key string) 
 // validate drops candidates the gateway definitively rejects for this key and
 // keeps catalog order. Each probe is a real one-token chat dispatch, so it is
 // counted on the display-only quota card like any other request.
-func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, key string, candidates []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
+// Verdicts are cached under the host auth ID. Plugin auth IDs derive from the
+// key (see auth.go), so a changed key is a new cache entry; without an ID
+// nothing is cached.
+func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, key, authID string, candidates []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
 	budget, cancel := context.WithTimeout(ctx, discoveryBudget)
 	defer cancel()
-	digest := sha256.Sum256([]byte(key))
+	cache := c.cache
+	if authID == "" {
+		cache = nil
+	}
 	alive := make([]bool, len(candidates))
 	sem := make(chan struct{}, probeConcurrency)
 	var wg sync.WaitGroup
 	for i, m := range candidates {
 		id := strings.TrimPrefix(m.ID, modelPrefix)
-		if v, ok := c.cache.get(digest, id); ok {
+		if v, ok := cache.get(authID, id); ok {
 			alive[i] = v
 			continue
 		}
@@ -149,9 +154,9 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 			usable, definitive := probeModel(budget, client, key, id)
 			alive[i] = usable
 			if definitive {
-				c.cache.put(digest, id, usable, verdictTTL)
+				cache.put(authID, id, usable, verdictTTL)
 			} else if budget.Err() == nil {
-				c.cache.put(digest, id, true, inconclusiveTTL)
+				cache.put(authID, id, true, inconclusiveTTL)
 			}
 		}()
 	}
@@ -196,14 +201,13 @@ func probeModel(ctx context.Context, client pluginapi.HostHTTPClient, key, id st
 	return true, false
 }
 
-// verdictCache remembers per-key model verdicts (definitive for 6 h,
+// verdictCache remembers per-auth model verdicts (definitive for 6 h,
 // inconclusive for 15 min) so hot reloads and repeated discovery do not
-// re-probe the catalog. Keys are SHA-256
-// digests; no credential is retained.
+// re-probe the catalog. No credential is retained.
 type verdictCache struct {
 	mu  sync.Mutex
 	now func() time.Time
-	m   map[[32]byte]map[string]verdict
+	m   map[string]map[string]verdict
 }
 type verdict struct {
 	usable  bool
@@ -211,28 +215,28 @@ type verdict struct {
 }
 
 func newVerdictCache() *verdictCache {
-	return &verdictCache{now: time.Now, m: make(map[[32]byte]map[string]verdict)}
+	return &verdictCache{now: time.Now, m: make(map[string]map[string]verdict)}
 }
-func (c *verdictCache) get(digest [32]byte, id string) (bool, bool) {
+func (c *verdictCache) get(authID, id string) (bool, bool) {
 	if c == nil {
 		return false, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v, ok := c.m[digest][id]
+	v, ok := c.m[authID][id]
 	if !ok || !c.now().Before(v.expires) {
 		return false, false
 	}
 	return v.usable, true
 }
-func (c *verdictCache) put(digest [32]byte, id string, usable bool, ttl time.Duration) {
+func (c *verdictCache) put(authID, id string, usable bool, ttl time.Duration) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.m[digest] == nil {
-		c.m[digest] = make(map[string]verdict)
+	if c.m[authID] == nil {
+		c.m[authID] = make(map[string]verdict)
 	}
-	c.m[digest][id] = verdict{usable: usable, expires: c.now().Add(ttl)}
+	c.m[authID][id] = verdict{usable: usable, expires: c.now().Add(ttl)}
 }

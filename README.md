@@ -86,7 +86,7 @@ and then **validates every candidate** with a one-token streaming chat probe
   inconclusive and the model is kept, so a transient upstream problem never
   empties the catalog.
 - At most 8 probes run at once, each bounded to 5 s, the whole validation to
-  30 s. Definitive verdicts are cached per key digest for 6 h and inconclusive
+  30 s. Definitive verdicts are cached per auth for 6 h and inconclusive
   ones for 15 min, so host client reloads do not re-probe the catalog.
 - Each probe is a real dispatch and is counted on the local RPM card. A full
   first discovery can therefore use most of a 40 RPM minute.
