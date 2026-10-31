@@ -80,7 +80,8 @@ Discovery therefore deduplicates IDs, excludes explicit embedding/reranking IDs
 and then **validates every candidate** with a one-token streaming chat probe
 (`max_tokens: 1`, cancelled as soon as response headers arrive):
 
-- 403, 404 or 410: the model is not usable by this key and is not advertised.
+- 400 or 422 (rejects a minimal chat request, e.g. a document parser), 403,
+  404 or 410: the model is not usable by this key and is not advertised.
 - 2xx: usable. Any other outcome (429, 5xx, timeout, transport error) is
   inconclusive and the model is kept, so a transient upstream problem never
   empties the catalog.

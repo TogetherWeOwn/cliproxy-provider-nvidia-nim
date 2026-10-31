@@ -165,9 +165,10 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 
 // probeModel sends a one-token streaming chat request and decides on the
 // response status alone; the stream is cancelled as soon as headers arrive.
-// 403/404/410 mean the model is not usable by this key (not entitled, no
-// function deployed for the account, end of life). 2xx proves it is usable.
-// Anything else is inconclusive.
+// 400/422 mean the model rejects a minimal chat request (not a chat model);
+// 403/404/410 mean it is not usable by this key (not entitled, no function
+// deployed for the account, end of life). 2xx proves it is usable. Anything
+// else (429, 5xx, timeouts) is inconclusive.
 func probeModel(ctx context.Context, client pluginapi.HostHTTPClient, key, id string) (usable, definitive bool) {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
@@ -184,7 +185,7 @@ func probeModel(ctx context.Context, client pluginapi.HostHTTPClient, key, id st
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return true, true
-	case resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusGone:
+	case resp.StatusCode == http.StatusBadRequest, resp.StatusCode == http.StatusUnprocessableEntity, resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusGone:
 		return false, true
 	}
 	return true, false

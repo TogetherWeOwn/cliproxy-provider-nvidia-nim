@@ -24,7 +24,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	probes := map[string]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
-			io.WriteString(w, `{"data":[{"id":"ok/alive"},{"id":"meta/llama-3.2-11b-vision-instruct"},{"id":"old/retired"},{"id":"paid/forbidden"},{"id":"busy/rate-limited"},{"id":"flaky/server-error"},{"id":"slow/no-headers"},{"id":"nvidia/also-alive"}]}`)
+			io.WriteString(w, `{"data":[{"id":"ok/alive"},{"id":"meta/llama-3.2-11b-vision-instruct"},{"id":"old/retired"},{"id":"paid/forbidden"},{"id":"nvidia/nemotron-parse"},{"id":"strict/validation"},{"id":"busy/rate-limited"},{"id":"flaky/server-error"},{"id":"slow/no-headers"},{"id":"nvidia/also-alive"}]}`)
 			return
 		}
 		var body map[string]any
@@ -43,6 +43,10 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 			w.WriteHeader(http.StatusGone)
 		case "paid/forbidden":
 			w.WriteHeader(http.StatusForbidden)
+		case "nvidia/nemotron-parse": // live: document parser rejects a chat request with 400
+			w.WriteHeader(http.StatusBadRequest)
+		case "strict/validation":
+			w.WriteHeader(http.StatusUnprocessableEntity)
 		case "busy/rate-limited":
 			w.WriteHeader(http.StatusTooManyRequests)
 		case "flaky/server-error":
@@ -76,7 +80,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 		t.Fatalf("validation took %s; slow probes must be bounded", elapsed)
 	}
 	quota, err := q.FetchQuota(context.Background(), quotaRequest("nvapi-example", 100))
-	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .92 {
+	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .90 {
 		t.Fatalf("each probe is a real dispatch and must be counted: %+v %v", quota, err)
 	}
 	// Second discovery re-probes only inconclusive models.
@@ -86,7 +90,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for id, wantProbes := range map[string]int{"ok/alive": 1, "meta/llama-3.2-11b-vision-instruct": 1, "old/retired": 1, "paid/forbidden": 1, "nvidia/also-alive": 1, "busy/rate-limited": 2, "flaky/server-error": 2, "slow/no-headers": 2} {
+	for id, wantProbes := range map[string]int{"ok/alive": 1, "meta/llama-3.2-11b-vision-instruct": 1, "old/retired": 1, "paid/forbidden": 1, "nvidia/nemotron-parse": 1, "strict/validation": 1, "nvidia/also-alive": 1, "busy/rate-limited": 2, "flaky/server-error": 2, "slow/no-headers": 2} {
 		if probes[id] != wantProbes {
 			t.Errorf("%s probed %d times, want %d", id, probes[id], wantProbes)
 		}
