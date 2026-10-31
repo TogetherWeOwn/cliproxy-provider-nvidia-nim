@@ -25,6 +25,9 @@ const (
 	probeTimeout     = 5 * time.Second
 	discoveryBudget  = 30 * time.Second
 	verdictTTL       = 6 * time.Hour
+	// Inconclusive probes keep the model and are retried only after this, so
+	// every host client reload does not spend RPM re-probing slow models.
+	inconclusiveTTL = 15 * time.Minute
 )
 
 type catalog struct {
@@ -144,9 +147,11 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 			defer func() { <-sem }()
 			c.quota.record(key)
 			usable, definitive := probeModel(budget, client, key, id)
+			alive[i] = usable
 			if definitive {
-				alive[i] = usable
-				c.cache.put(digest, id, usable)
+				c.cache.put(digest, id, usable, verdictTTL)
+			} else if budget.Err() == nil {
+				c.cache.put(digest, id, true, inconclusiveTTL)
 			}
 		}()
 	}
@@ -191,8 +196,9 @@ func probeModel(ctx context.Context, client pluginapi.HostHTTPClient, key, id st
 	return true, false
 }
 
-// verdictCache remembers definitive per-key model verdicts so hot reloads and
-// repeated discovery do not re-probe the whole catalog. Keys are SHA-256
+// verdictCache remembers per-key model verdicts (definitive for 6 h,
+// inconclusive for 15 min) so hot reloads and repeated discovery do not
+// re-probe the catalog. Keys are SHA-256
 // digests; no credential is retained.
 type verdictCache struct {
 	mu  sync.Mutex
@@ -219,7 +225,7 @@ func (c *verdictCache) get(digest [32]byte, id string) (bool, bool) {
 	}
 	return v.usable, true
 }
-func (c *verdictCache) put(digest [32]byte, id string, usable bool) {
+func (c *verdictCache) put(digest [32]byte, id string, usable bool, ttl time.Duration) {
 	if c == nil {
 		return
 	}
@@ -228,5 +234,5 @@ func (c *verdictCache) put(digest [32]byte, id string, usable bool) {
 	if c.m[digest] == nil {
 		c.m[digest] = make(map[string]verdict)
 	}
-	c.m[digest][id] = verdict{usable: usable, expires: c.now().Add(verdictTTL)}
+	c.m[digest][id] = verdict{usable: usable, expires: c.now().Add(ttl)}
 }

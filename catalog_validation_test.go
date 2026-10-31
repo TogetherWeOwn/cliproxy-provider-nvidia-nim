@@ -83,10 +83,17 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .90 {
 		t.Fatalf("each probe is a real dispatch and must be counted: %+v %v", quota, err)
 	}
-	// Second discovery re-probes only inconclusive models.
+	// A reload within the inconclusive TTL re-probes nothing.
 	out, err = c.ModelsForAuth(context.Background(), req)
 	if err != nil || ids(out.Models) != want {
 		t.Fatalf("second discovery %v %v", ids(out.Models), err)
+	}
+	// After it, only inconclusive models are re-probed.
+	later := time.Now().Add(inconclusiveTTL)
+	c.cache.now = func() time.Time { return later }
+	out, err = c.ModelsForAuth(context.Background(), req)
+	if err != nil || ids(out.Models) != want {
+		t.Fatalf("third discovery %v %v", ids(out.Models), err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -102,7 +109,7 @@ func TestVerdictCacheExpires(t *testing.T) {
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	c.now = func() time.Time { return now }
 	var digest [32]byte
-	c.put(digest, "m", false)
+	c.put(digest, "m", false, verdictTTL)
 	if usable, ok := c.get(digest, "m"); !ok || usable {
 		t.Fatal("fresh verdict missing")
 	}
