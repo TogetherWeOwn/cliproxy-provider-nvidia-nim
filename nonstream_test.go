@@ -31,6 +31,9 @@ func TestNonStreamExecuteStreamsUpstreamAndAggregatesToJSON(t *testing.T) {
 		if json.NewDecoder(r.Body).Decode(&body) != nil || body["stream"] != true || body["model"] != "stepfun-ai/step-5-preview" {
 			t.Errorf("upstream must receive stream=true, got %v", body)
 		}
+		if opts, _ := body["stream_options"].(map[string]any); opts["include_usage"] != true {
+			t.Errorf("non-streaming execute must request the usage chunk, got %v", body["stream_options"])
+		}
 		if body["stream"] == false {
 			// Mimic NVCF: queued non-stream invocation times out with an empty body.
 			w.WriteHeader(http.StatusGatewayTimeout)
@@ -162,5 +165,33 @@ func TestNonStreamExecuteHonoursCancellation(t *testing.T) {
 	_, err := newExecutor(newQuotaProvider()).Execute(ctx, nonStreamRequest(server))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("cancellation %v", err)
+	}
+}
+
+func TestRequestStreamUsageKeepsCallerOptions(t *testing.T) {
+	for name, tc := range map[string]struct{ in, want string }{
+		"absent":          {`{"model":"m"}`, `{"model":"m","stream_options":{"include_usage":true}}`},
+		"null":            {`{"model":"m","stream_options":null}`, `{"model":"m","stream_options":{"include_usage":true}}`},
+		"other option":    {`{"model":"m","stream_options":{"continuous_usage_stats":true}}`, `{"model":"m","stream_options":{"continuous_usage_stats":true,"include_usage":true}}`},
+		"explicit false":  {`{"model":"m","stream_options":{"include_usage":false}}`, `{"model":"m","stream_options":{"include_usage":false}}`},
+		"invalid options": {`{"model":"m","stream_options":"x"}`, `{"model":"m","stream_options":"x"}`},
+		"invalid payload": {`not json`, `not json`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := requestStreamUsage([]byte(tc.in))
+			var a, b any
+			if json.Unmarshal(got, &a) != nil {
+				if string(got) != tc.want {
+					t.Fatalf("got %s want %s", got, tc.want)
+				}
+				return
+			}
+			json.Unmarshal([]byte(tc.want), &b)
+			ga, _ := json.Marshal(a)
+			gb, _ := json.Marshal(b)
+			if string(ga) != string(gb) {
+				t.Fatalf("got %s want %s", got, tc.want)
+			}
+		})
 	}
 }

@@ -60,6 +60,7 @@ func (e executor) client(c pluginapi.HostHTTPClient) pluginapi.HostHTTPClient {
 func (e executor) Execute(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	r.Payload = requestStreamUsage(r.Payload)
 	stream, err := e.ExecuteStream(streamCtx, r)
 	if err != nil {
 		return pluginapi.ExecutorResponse{}, err
@@ -83,6 +84,34 @@ func (e executor) Execute(ctx context.Context, r pluginapi.ExecutorRequest) (plu
 		headers.Del(h)
 	}
 	return pluginapi.ExecutorResponse{Payload: payload, Headers: headers}, nil
+}
+
+// requestStreamUsage asks for the usage chunk a non-streaming reply needs.
+// Some hosted models (live: nvidia/nemotron-3.5-lightning-30b-a3b) omit usage
+// from a stream unless stream_options.include_usage is set. Caller-supplied
+// stream_options are kept; an explicit include_usage is never overridden. An
+// invalid payload is left for buildRequest to reject.
+func requestStreamUsage(payload []byte) []byte {
+	var body map[string]json.RawMessage
+	if json.Unmarshal(payload, &body) != nil || body == nil {
+		return payload
+	}
+	options := map[string]json.RawMessage{}
+	if raw, ok := body["stream_options"]; ok && string(raw) != "null" {
+		if json.Unmarshal(raw, &options) != nil || options == nil {
+			return payload
+		}
+	}
+	if _, set := options["include_usage"]; set {
+		return payload
+	}
+	options["include_usage"] = json.RawMessage("true")
+	body["stream_options"], _ = json.Marshal(options)
+	out, err := json.Marshal(body)
+	if err != nil {
+		return payload
+	}
+	return out
 }
 
 func isJSONResponse(h http.Header) bool {

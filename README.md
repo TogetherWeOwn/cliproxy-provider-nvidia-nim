@@ -106,8 +106,10 @@ queued invocation path, which holds the connection up to `NVCF-POLL-SECONDS`
 (300 s by default) and then answers 504 (or 202 pending) with an empty body; on
 2026-10-31 `stepfun-ai/step-5-preview` non-streaming timed out with 504 after
 302 s while the same request streamed in 5 s. `Execute` therefore sends
-`stream:true` and aggregates the SSE (content, reasoning, tool-call fragments,
-usage) into one `chat.completion` JSON document; an upstream that ignores the
+`stream:true` plus `stream_options.include_usage: true` (some hosted models omit
+usage from a stream otherwise; caller-set `stream_options` are kept) and
+aggregates the SSE (content, reasoning, tool-call fragments, usage) into one
+`chat.completion` JSON document; an upstream that ignores the
 flag and answers `application/json` is passed through after validation. An
 empty, non-JSON or truncated 2xx reply is a retryable 502, never a successful
 empty completion. `ExecuteStream` relays SSE incrementally, including `[DONE]`,
