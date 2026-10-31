@@ -90,8 +90,8 @@ func isJSONResponse(h http.Header) bool {
 	return ct == "application/json"
 }
 
-// collectJSON reads a bounded single JSON object. An empty or non-JSON 2xx body
-// is an invalid upstream reply, never a successful completion.
+// collectJSON reads a bounded single JSON completion. An empty, non-JSON or
+// choice-less 2xx body is an invalid upstream reply, never a success.
 func collectJSON(ctx context.Context, chunks <-chan pluginapi.ExecutorStreamChunk) ([]byte, error) {
 	raw, err := io.ReadAll(&chunkReader{ctx: ctx, chunks: chunks})
 	if err != nil {
@@ -100,8 +100,11 @@ func collectJSON(ctx context.Context, chunks <-chan pluginapi.ExecutorStreamChun
 		}
 		return nil, invalidSSE()
 	}
-	var object map[string]json.RawMessage
-	if json.Unmarshal(raw, &object) != nil || object == nil {
+	// A 2xx JSON pending/error object is not a completion.
+	var object struct {
+		Choices []json.RawMessage `json:"choices"`
+	}
+	if json.Unmarshal(raw, &object) != nil || len(object.Choices) == 0 {
 		return nil, invalidSSE()
 	}
 	return raw, nil

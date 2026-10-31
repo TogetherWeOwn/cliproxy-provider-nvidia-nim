@@ -1,8 +1,11 @@
 # Wire contract, provenance and evidence limits
 
 Official documentation was checked on 2026-10-31. Documentation requests are not
-live inference/model/quota verification. The implementation is tested exclusively
-against loopback HTTP mocks and the original pinned host module.
+live inference/model/quota verification. Repository tests run exclusively against
+loopback HTTP mocks and the original pinned host module. Rows marked **Live check
+2026-10-31** record separate manual measurements against the hosted API with one
+key (direct calls and a staging host); they are dated observations, not
+guarantees, and no test depends on them.
 
 ## Official NVIDIA wire sources
 

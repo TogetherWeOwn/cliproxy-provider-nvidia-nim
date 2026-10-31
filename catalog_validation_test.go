@@ -24,7 +24,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	probes := map[string]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
-			io.WriteString(w, `{"data":[{"id":"ok/alive"},{"id":"meta/llama-3.2-11b-vision-instruct"},{"id":"old/retired"},{"id":"paid/forbidden"},{"id":"nvidia/nemotron-parse"},{"id":"strict/validation"},{"id":"busy/rate-limited"},{"id":"flaky/server-error"},{"id":"slow/no-headers"},{"id":"nvidia/also-alive"}]}`)
+			io.WriteString(w, `{"data":[{"id":"ok/alive"},{"id":"meta/llama-3.2-11b-vision-instruct"},{"id":"old/retired"},{"id":"paid/forbidden"},{"id":"nvidia/nemotron-parse"},{"id":"strict/validation"},{"id":"queued/pending"},{"id":"busy/rate-limited"},{"id":"flaky/server-error"},{"id":"slow/no-headers"},{"id":"nvidia/also-alive"}]}`)
 			return
 		}
 		var body map[string]any
@@ -47,6 +47,8 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 		case "strict/validation":
 			w.WriteHeader(http.StatusUnprocessableEntity)
+		case "queued/pending": // NVCF 202: inconclusive, kept and re-probed later
+			w.WriteHeader(http.StatusAccepted)
 		case "busy/rate-limited":
 			w.WriteHeader(http.StatusTooManyRequests)
 		case "flaky/server-error":
@@ -66,8 +68,8 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	defer server.Close()
 	q := newQuotaProvider()
 	c := newCatalog(q)
-	req := pluginapi.AuthModelRequest{AuthID: "nvidia-nim:example", StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
-	want := "nvidia/ok/alive,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/nvidia/also-alive"
+	req := pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
+	want := "nvidia/ok/alive,nvidia/queued/pending,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/nvidia/also-alive"
 	start := time.Now()
 	out, err := c.ModelsForAuth(context.Background(), req)
 	if err != nil {
@@ -80,7 +82,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 		t.Fatalf("validation took %s; slow probes must be bounded", elapsed)
 	}
 	quota, err := q.FetchQuota(context.Background(), quotaRequest("nvapi-example", 100))
-	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .90 {
+	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .89 {
 		t.Fatalf("each probe is a real dispatch and must be counted: %+v %v", quota, err)
 	}
 	// A reload within the inconclusive TTL re-probes nothing.
@@ -97,7 +99,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for id, wantProbes := range map[string]int{"ok/alive": 1, "meta/llama-3.2-11b-vision-instruct": 1, "old/retired": 1, "paid/forbidden": 1, "nvidia/nemotron-parse": 1, "strict/validation": 1, "nvidia/also-alive": 1, "busy/rate-limited": 2, "flaky/server-error": 2, "slow/no-headers": 2} {
+	for id, wantProbes := range map[string]int{"ok/alive": 1, "meta/llama-3.2-11b-vision-instruct": 1, "old/retired": 1, "paid/forbidden": 1, "nvidia/nemotron-parse": 1, "strict/validation": 1, "queued/pending": 2, "nvidia/also-alive": 1, "busy/rate-limited": 2, "flaky/server-error": 2, "slow/no-headers": 2} {
 		if probes[id] != wantProbes {
 			t.Errorf("%s probed %d times, want %d", id, probes[id], wantProbes)
 		}
@@ -108,13 +110,20 @@ func TestVerdictCacheExpires(t *testing.T) {
 	c := newVerdictCache()
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	c.now = func() time.Time { return now }
-	c.put("auth", "m", false, verdictTTL)
-	if usable, ok := c.get("auth", "m"); !ok || usable {
+	c.put(1, "m", false, verdictTTL)
+	if usable, ok := c.get(1, "m"); !ok || usable {
 		t.Fatal("fresh verdict missing")
 	}
 	now = now.Add(verdictTTL)
-	if _, ok := c.get("auth", "m"); ok {
+	if _, ok := c.get(1, "m"); ok {
 		t.Fatal("expired verdict reused")
+	}
+	c.put(2, "other", true, verdictTTL) // writes prune expired entries
+	if _, kept := c.m[1]; kept {
+		t.Fatal("expired verdicts not pruned")
+	}
+	if c.tag("nvapi-a") == c.tag("nvapi-b") || c.tag("nvapi-a") != c.tag("nvapi-a") {
+		t.Fatal("cache tag must separate keys and be stable")
 	}
 }
 
@@ -142,4 +151,50 @@ func ids(models []pluginapi.ModelInfo) string {
 		out = append(out, m.ID)
 	}
 	return strings.Join(out, ",")
+}
+
+// Overlapping discoveries share one probe limit.
+func TestConcurrentDiscoveriesShareTheProbeLimit(t *testing.T) {
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
+	var catalogIDs []string
+	for i := 0; i < 3*probeConcurrency; i++ {
+		catalogIDs = append(catalogIDs, `{"id":"org/m`+string(rune('a'+i))+`"}`)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			io.WriteString(w, `{"data":[`+strings.Join(catalogIDs, ",")+`]}`)
+			return
+		}
+		io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		inFlight++
+		if inFlight > peak {
+			peak = inFlight
+		}
+		mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	c := newCatalog(nil)
+	var wg sync.WaitGroup
+	for _, key := range []string{"nvapi-one", "nvapi-two"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, err := c.ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"` + key + `"}`), HTTPClient: mockHostClient{server}})
+			if err != nil || len(out.Models) != len(catalogIDs) {
+				t.Errorf("discovery %d %v", len(out.Models), err)
+			}
+		}()
+	}
+	wg.Wait()
+	if peak > probeConcurrency {
+		t.Fatalf("peak concurrent probes %d > %d", peak, probeConcurrency)
+	}
 }

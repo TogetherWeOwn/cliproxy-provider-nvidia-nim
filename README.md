@@ -82,11 +82,11 @@ and then **validates every candidate** with a one-token streaming chat probe
 
 - 400 or 422 (rejects a minimal chat request, e.g. a document parser), 403,
   404 or 410: the model is not usable by this key and is not advertised.
-- 2xx: usable. Any other outcome (429, 5xx, timeout, transport error) is
-  inconclusive and the model is kept, so a transient upstream problem never
-  empties the catalog.
-- At most 8 probes run at once, each bounded to 5 s, the whole validation to
-  30 s. Definitive verdicts are cached per auth for 6 h and inconclusive
+- 2xx other than 202: usable. Any other outcome (202 pending, 429, 5xx,
+  timeout, transport error) is inconclusive and the model is kept, so a
+  transient upstream problem never empties the catalog.
+- At most 8 probes run at once across all discoveries, each bounded to 5 s, the whole validation to
+  30 s. Definitive verdicts are cached per key for 6 h and inconclusive
   ones for 15 min, so host client reloads do not re-probe the catalog.
 - Each probe is a real dispatch and is counted on the local RPM card. A full
   first discovery can therefore use most of a 40 RPM minute.
@@ -124,9 +124,11 @@ The quota card is **local observation, not an authoritative NVIDIA balance**:
 - `used` counts executor dispatch attempts in the trailing `(now - 60s, now]`.
   Normal, streaming and raw-HTTP inference each count once before host dispatch.
   Failed upstream requests, retries performed as new executor calls and
-  transport failures count conservatively. Invalid local payloads, absent host
-  transport, already-cancelled requests, token counting and model discovery do
-  not count. Completion/usage notifications cannot double-count streams.
+  transport failures count conservatively. Each catalog validation probe is a
+  real one-token chat dispatch and counts too; the `/v1/models` list request,
+  invalid local payloads, absent host transport, already-cancelled requests and
+  token counting do not. Completion/usage notifications cannot double-count
+  streams.
 - `capacity` is the auth file's `requests_per_minute`, or the labelled unofficial
   40 RPM default when it is omitted. Summary metrics
   expose `requests_used` and `requests_per_minute` because the pinned bucket

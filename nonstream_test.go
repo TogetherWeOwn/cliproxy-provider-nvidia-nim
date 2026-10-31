@@ -108,11 +108,12 @@ func TestNonStreamExecuteRejectsEmptyOrIncompleteSuccessBodies(t *testing.T) {
 		ct     string
 		body   string
 	}{
-		"empty json 200":     {200, "application/json", ""},
-		"non-json 200":       {200, "application/json", "<html>gateway</html>"},
-		"202 pending":        {202, "application/json", ""},
-		"sse without done":   {200, "text/event-stream", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"}}]}\n\n"},
-		"sse without choice": {200, "text/event-stream", "data: [DONE]\n\n"},
+		"empty json 200":       {200, "application/json", ""},
+		"non-json 200":         {200, "application/json", "<html>gateway</html>"},
+		"202 pending":          {202, "application/json", ""},
+		"json without choices": {200, "application/json", `{"status":"pending","id":"req-1"}`},
+		"sse without done":     {200, "text/event-stream", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"}}]}\n\n"},
+		"sse without choice":   {200, "text/event-stream", "data: [DONE]\n\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

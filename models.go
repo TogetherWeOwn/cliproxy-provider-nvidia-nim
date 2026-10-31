@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"hash/maphash"
 	"net/http"
 	"strings"
 	"sync"
@@ -32,9 +33,14 @@ const (
 type catalog struct {
 	cache *verdictCache
 	quota *quotaProvider
+	// probes is shared by every discovery so overlapping ModelsForAuth calls
+	// stay within probeConcurrency in total.
+	probes chan struct{}
 }
 
-func newCatalog(q *quotaProvider) catalog { return catalog{cache: newVerdictCache(), quota: q} }
+func newCatalog(q *quotaProvider) catalog {
+	return catalog{cache: newVerdictCache(), quota: q, probes: make(chan struct{}, probeConcurrency)}
+}
 
 // Fallback IDs are published chat models, not an entitlement/free-tier claim.
 // Wire/API references are recorded in docs/SOURCES.md. Fallbacks are validated
@@ -68,7 +74,7 @@ func (c catalog) ModelsForAuth(ctx context.Context, r pluginapi.AuthModelRequest
 	if err != nil {
 		return pluginapi.ModelResponse{}, err
 	}
-	models, err := c.validate(ctx, r.HTTPClient, key, r.AuthID, candidates)
+	models, err := c.validate(ctx, r.HTTPClient, key, candidates)
 	if err != nil {
 		return pluginapi.ModelResponse{}, err
 	}
@@ -121,22 +127,20 @@ func discover(ctx context.Context, client pluginapi.HostHTTPClient, key string) 
 // validate drops candidates the gateway definitively rejects for this key and
 // keeps catalog order. Each probe is a real one-token chat dispatch, so it is
 // counted on the display-only quota card like any other request.
-// Verdicts are cached under the host auth ID. Plugin auth IDs derive from the
-// key (see auth.go), so a changed key is a new cache entry; without an ID
-// nothing is cached.
-func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, key, authID string, candidates []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
+func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, key string, candidates []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
 	budget, cancel := context.WithTimeout(ctx, discoveryBudget)
 	defer cancel()
 	cache := c.cache
-	if authID == "" {
-		cache = nil
-	}
+	tag := cache.tag(key)
 	alive := make([]bool, len(candidates))
-	sem := make(chan struct{}, probeConcurrency)
+	sem := c.probes
+	if sem == nil {
+		sem = make(chan struct{}, probeConcurrency)
+	}
 	var wg sync.WaitGroup
 	for i, m := range candidates {
 		id := strings.TrimPrefix(m.ID, modelPrefix)
-		if v, ok := cache.get(authID, id); ok {
+		if v, ok := cache.get(tag, id); ok {
 			alive[i] = v
 			continue
 		}
@@ -154,9 +158,9 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 			usable, definitive := probeModel(budget, client, key, id)
 			alive[i] = usable
 			if definitive {
-				cache.put(authID, id, usable, verdictTTL)
+				cache.put(tag, id, usable, verdictTTL)
 			} else if budget.Err() == nil {
-				cache.put(authID, id, true, inconclusiveTTL)
+				cache.put(tag, id, true, inconclusiveTTL)
 			}
 		}()
 	}
@@ -177,8 +181,8 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 // response status alone; the stream is cancelled as soon as headers arrive.
 // 400/422 mean the model rejects a minimal chat request (not a chat model);
 // 403/404/410 mean it is not usable by this key (not entitled, no function
-// deployed for the account, end of life). 2xx proves it is usable. Anything
-// else (429, 5xx, timeouts) is inconclusive.
+// deployed for the account, end of life). 2xx other than 202 proves it is
+// usable. Anything else (202 pending, 429, 5xx, timeouts) is inconclusive.
 func probeModel(ctx context.Context, client pluginapi.HostHTTPClient, key, id string) (usable, definitive bool) {
 	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
@@ -193,6 +197,8 @@ func probeModel(ctx context.Context, client pluginapi.HostHTTPClient, key, id st
 		}
 	}
 	switch {
+	case resp.StatusCode == http.StatusAccepted:
+		return true, false // NVCF "pending": nothing was proven
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return true, true
 	case resp.StatusCode == http.StatusBadRequest, resp.StatusCode == http.StatusUnprocessableEntity, resp.StatusCode == http.StatusForbidden, resp.StatusCode == http.StatusNotFound, resp.StatusCode == http.StatusGone:
@@ -201,13 +207,16 @@ func probeModel(ctx context.Context, client pluginapi.HostHTTPClient, key, id st
 	return true, false
 }
 
-// verdictCache remembers per-auth model verdicts (definitive for 6 h,
+// verdictCache remembers per-key model verdicts (definitive for 6 h,
 // inconclusive for 15 min) so hot reloads and repeated discovery do not
-// re-probe the catalog. No credential is retained.
+// re-probe the catalog. Entries are keyed by a process-seeded maphash of the
+// key (not a stored credential and not a password hash): a changed key is a
+// new entry, and expired entries are pruned on write.
 type verdictCache struct {
-	mu  sync.Mutex
-	now func() time.Time
-	m   map[string]map[string]verdict
+	mu   sync.Mutex
+	now  func() time.Time
+	seed maphash.Seed
+	m    map[uint64]map[string]verdict
 }
 type verdict struct {
 	usable  bool
@@ -215,28 +224,45 @@ type verdict struct {
 }
 
 func newVerdictCache() *verdictCache {
-	return &verdictCache{now: time.Now, m: make(map[string]map[string]verdict)}
+	return &verdictCache{now: time.Now, seed: maphash.MakeSeed(), m: make(map[uint64]map[string]verdict)}
 }
-func (c *verdictCache) get(authID, id string) (bool, bool) {
+func (c *verdictCache) tag(key string) uint64 {
+	if c == nil {
+		return 0
+	}
+	return maphash.String(c.seed, key)
+}
+func (c *verdictCache) get(tag uint64, id string) (bool, bool) {
 	if c == nil {
 		return false, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	v, ok := c.m[authID][id]
+	v, ok := c.m[tag][id]
 	if !ok || !c.now().Before(v.expires) {
 		return false, false
 	}
 	return v.usable, true
 }
-func (c *verdictCache) put(authID, id string, usable bool, ttl time.Duration) {
+func (c *verdictCache) put(tag uint64, id string, usable bool, ttl time.Duration) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.m[authID] == nil {
-		c.m[authID] = make(map[string]verdict)
+	now := c.now()
+	for t, entries := range c.m {
+		for model, v := range entries {
+			if !now.Before(v.expires) {
+				delete(entries, model)
+			}
+		}
+		if len(entries) == 0 {
+			delete(c.m, t)
+		}
 	}
-	c.m[authID][id] = verdict{usable: usable, expires: c.now().Add(ttl)}
+	if c.m[tag] == nil {
+		c.m[tag] = make(map[string]verdict)
+	}
+	c.m[tag][id] = verdict{usable: usable, expires: now.Add(ttl)}
 }
