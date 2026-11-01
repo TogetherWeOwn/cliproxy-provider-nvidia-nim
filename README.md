@@ -3,7 +3,7 @@
 First-class NVIDIA API-key auth files, namespaced OpenAI-compatible chat models,
 incremental streaming and **display-only local requests-per-minute quota cards**.
 Uses [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at commit `21069bf` (pseudo-version `v0.1.1-0.20261101054300-21069bfec8f1`)
+at commit `88850ce` (pseudo-version `v0.1.1-0.20261101115341-88850ce995e6`)
 and is tested against the original **CLIProxyAPI v8.0.49 C-ABI host** (ABI 1 /
 RPC schema 10). Requires CLIProxyAPI v8.0.49 or newer: the kit answers schema 10
 and refuses hosts older than schema 10. The plugin declares no multi-auth
