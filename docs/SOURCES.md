@@ -1,8 +1,11 @@
 # Wire contract, provenance and evidence limits
 
 Official documentation was checked on 2026-10-31. Documentation requests are not
-live inference/model/quota verification. The implementation is tested exclusively
-against loopback HTTP mocks and the original pinned host module.
+live inference/model/quota verification. Repository tests run exclusively against
+loopback HTTP mocks and the original pinned host module. Rows marked **Live check
+2026-10-31** record separate manual measurements against the hosted API with one
+key (direct calls and a staging host); they are dated observations, not
+guarantees, and no test depends on them.
 
 ## Official NVIDIA wire sources
 
@@ -11,11 +14,12 @@ against loopback HTTP mocks and the original pinned host module.
 | `POST https://integrate.api.nvidia.com/v1/chat/completions`, JSON request body, `model`, `messages`, `stream`, OpenAI-style response | [Step-5 Preview chat reference](https://docs.api.nvidia.com/nim/reference/stepfun-ai-step-5-preview-infer), [Llama 3.1 8B inference reference](https://docs.api.nvidia.com/nim/reference/meta-llama-3_1-8b-infer), [LLM API index](https://docs.api.nvidia.com/nim/reference/llm-apis) | Endpoint is fixed in production; payload options remain upstream-owned. Model-specific support is not universal. |
 | Bearer authorization | Step-5 reference above (`BearerAuth`, HTTP scheme `bearer`); [NVIDIA NeMo Helix Guardrails troubleshooting](https://docs.nvidia.com/nemo-helix/documentation/reference/troubleshooting/guardrails/) | The latter shows `NVIDIA_API_KEY=<nvapi-...>` with `Authorization: Bearer ${NVIDIA_API_KEY}`. Key-shape validation is not entitlement verification. |
 | API key acquisition, hosted prototyping flow | [NVIDIA API Catalog Quickstart](https://docs.api.nvidia.com/nim/docs/api-quickstart) | Obtain keys privately. The plugin never obtains or refreshes a key via a fabricated API. |
-| Streaming SSE deltas and `data: [DONE]` | Step-5 and Llama inference references above | `stream=true` uses SSE; content, reasoning and tool-call deltas are relayed without interpretation/aggregation. |
+| Streaming SSE deltas and `data: [DONE]` | Step-5 and Llama inference references above | `stream=true` uses SSE; `ExecuteStream` relays deltas without interpretation. Non-streaming `Execute` aggregates the same SSE into one `chat.completion`. |
+| Non-streaming invocations time out in the NVCF queue | Live check 2026-10-31 against `integrate.api.nvidia.com` | `stream:false` for `stepfun-ai/step-5-preview`: 504, empty body, `nvcf-status: errored` after 302 s (after 7 s with `NVCF-POLL-SECONDS: 5`); `stream:true` for the same request: 200 in 5 s. Basis for always streaming upstream. |
+| Catalog is not account availability | Live check 2026-10-31 | `GET /v1/models` listed 85 IDs; a one-token chat probe returned 404 "Function ... not found" for 60; a retired former fallback answered 410 "end of life". Basis for probe validation in `ModelsForAuth`. |
 | `GET https://integrate.api.nvidia.com/v1/models` | [NVIDIA NIM Operator: Managing NeMo Guardrails](https://docs.nvidia.com/nim-operator/latest/guardrail.html) | Explicitly links that hosted model-list endpoint. It does not document a numerical RPM entitlement or prove current per-key model access. |
 | Expected OpenAI model-list JSON `data[].id` | [OpenAI models/list reference](https://platform.openai.com/docs/api-reference/models/list), NVIDIA's OpenAI-compatible chat references above | Compatibility expectation, **pending live NVIDIA catalog-schema verification**. NVIDIA's hosted list-endpoint link alone does not establish its current full response schema. Invalid/unusable catalogs fall back to static IDs. |
-| Static `meta/llama-3.1-8b-instruct` | [Official model reference](https://docs.api.nvidia.com/nim/reference/meta-llama-3_1-8b), Llama inference reference above | Published ID, not a current entitlement guarantee. |
-| Static `nvidia/llama-3.3-nemotron-super-49b-v1.5` | [Official inference reference](https://docs.api.nvidia.com/nim/reference/nvidia-llama-3_3-nemotron-super-49b-v1_5-infer) | Exact hosted default model ID. The NVIDIA-owned namespace must survive stripping the plugin's separate `nvidia/` prefix. |
+| Removed static `meta/llama-3.1-8b-instruct`, `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Live check 2026-10-31 | The first answered 410 "reached its end of life on 2026-08-26"; the second is no longer in the hosted catalog. The NVIDIA-owned namespace rule (`nvidia/nvidia/...`) is still enforced for discovered IDs. |
 | Static `stepfun-ai/step-5-preview` | Step-5 inference reference above | Published ID, not a current free access/production-rights assertion. |
 | 401 missing/invalid key, 402 insufficient API credits, 429 request rate limit exceeded, 400/422 validation | Step-5 inference reference above | Other 403/auth and 404/not-found handling follows HTTP semantics. Actual NVIDIA credit/trial message variants remain pending live verification. |
 | Per-model/account-dependent request limits; no official universal free-tier RPM | [Official NVIDIA NIM FAQ](https://forums.developer.nvidia.com/t/nvidia-nim-faq/300317), [General FAQ](https://docs.api.nvidia.com/nim/docs/product) | The FAQ says the request rate varies by model and concurrent users and directs users to their signed-in account at build.nvidia.com. It gives no number. |

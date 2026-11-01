@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 
@@ -48,10 +49,94 @@ func (e executor) client(c pluginapi.HostHTTPClient) pluginapi.HostHTTPClient {
 	}
 	return observedClient{HostHTTPClient: c, quota: e.quota}
 }
+
+// Execute serves non-streaming clients from an upstream STREAMING request.
+// Hosted NIM routes stream=false through NVCF's queued invocation path: it holds
+// the connection up to NVCF-POLL-SECONDS (default 300 s) and then answers 504
+// (or 202 pending) with an EMPTY body, while the same model streams within
+// seconds. Streaming upstream and aggregating the SSE into one chat.completion
+// keeps non-streaming clients on the fast path and never relays an empty or
+// non-JSON 2xx body. One upstream attempt is still counted exactly once.
 func (e executor) Execute(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorResponse, error) {
-	r.Stream = false
-	r.HTTPClient = e.client(r.HTTPClient)
-	return e.Passthrough.Execute(ctx, r)
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	r.Payload = requestStreamUsage(r.Payload)
+	stream, err := e.ExecuteStream(streamCtx, r)
+	if err != nil {
+		return pluginapi.ExecutorResponse{}, err
+	}
+	var payload []byte
+	if isJSONResponse(stream.Headers) {
+		// Some deployments ignore stream=true and answer one JSON document.
+		payload, err = collectJSON(streamCtx, stream.Chunks)
+	} else {
+		payload, err = aggregateSSE(streamCtx, stream.Chunks)
+	}
+	if err != nil {
+		return pluginapi.ExecutorResponse{}, err
+	}
+	headers := stream.Headers.Clone()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	headers.Set("Content-Type", "application/json")
+	for _, h := range []string{"Content-Length", "Content-Encoding", "Transfer-Encoding"} {
+		headers.Del(h)
+	}
+	return pluginapi.ExecutorResponse{Payload: payload, Headers: headers}, nil
+}
+
+// requestStreamUsage asks for the usage chunk a non-streaming reply needs.
+// Some hosted models (live: nvidia/nemotron-3.5-lightning-30b-a3b) omit usage
+// from a stream unless stream_options.include_usage is set. Caller-supplied
+// stream_options are kept; an explicit include_usage is never overridden. An
+// invalid payload is left for buildRequest to reject.
+func requestStreamUsage(payload []byte) []byte {
+	var body map[string]json.RawMessage
+	if json.Unmarshal(payload, &body) != nil || body == nil {
+		return payload
+	}
+	options := map[string]json.RawMessage{}
+	if raw, ok := body["stream_options"]; ok && string(raw) != "null" {
+		if json.Unmarshal(raw, &options) != nil || options == nil {
+			return payload
+		}
+	}
+	if _, set := options["include_usage"]; set {
+		return payload
+	}
+	options["include_usage"] = json.RawMessage("true")
+	body["stream_options"], _ = json.Marshal(options)
+	out, err := json.Marshal(body)
+	if err != nil {
+		return payload
+	}
+	return out
+}
+
+func isJSONResponse(h http.Header) bool {
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(h.Get("Content-Type"), ";")[0]))
+	return ct == "application/json"
+}
+
+// collectJSON reads a bounded single JSON completion. An empty, non-JSON or
+// choice-less 2xx body is an invalid upstream reply, never a success.
+func collectJSON(ctx context.Context, chunks <-chan pluginapi.ExecutorStreamChunk) ([]byte, error) {
+	raw, err := io.ReadAll(&chunkReader{ctx: ctx, chunks: chunks})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, invalidSSE()
+	}
+	// A 2xx JSON pending/error object is not a completion.
+	var object struct {
+		Choices []json.RawMessage `json:"choices"`
+	}
+	if json.Unmarshal(raw, &object) != nil || len(object.Choices) == 0 {
+		return nil, invalidSSE()
+	}
+	return raw, nil
 }
 func (e executor) ExecuteStream(ctx context.Context, r pluginapi.ExecutorRequest) (pluginapi.ExecutorStreamResponse, error) {
 	r.Stream = true
