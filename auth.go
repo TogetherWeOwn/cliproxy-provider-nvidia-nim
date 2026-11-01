@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"math"
 	"strings"
-	"sync"
+	"time"
 	"unicode"
 
 	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
@@ -14,17 +14,24 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
-// Ownership is by filename, matching the Synthetic provider template. Only
+// Ownership is by filename, through the kit's KeyOwnership guard. Only
 // digests are retained; neither duplicate-file errors nor RPM state retain keys.
 // A plugin disable/enable clears filename ownership after renaming auth files.
+// Host parses commit ownership; login-validation parses are provisional and
+// only reserve the digest until the login session expires, so an abandoned
+// login releases the key instead of holding it until plugin restart.
 type authProvider struct {
 	kit.APIKeyAuth
-	mu     sync.Mutex
-	files  map[string][32]byte
-	owners map[[32]byte]string
+	guard kit.KeyOwnership
 }
 
 func newAuthProvider() (*authProvider, error) {
+	return newAuthProviderWithLoginTTL(0)
+}
+
+// newAuthProviderWithLoginTTL overrides the login session TTL; zero keeps the
+// kit default. It exists so tests can let a session lapse quickly.
+func newAuthProviderWithLoginTTL(sessionTTL time.Duration) (*authProvider, error) {
 	p := &authProvider{APIKeyAuth: kit.APIKeyAuth{Provider: provider, Validate: func(fields map[string]any) error {
 		if _, exists := fields["id"]; exists {
 			return invalidAuth("auth identity is derived from the API key")
@@ -35,10 +42,12 @@ func newAuthProvider() (*authProvider, error) {
 		}
 		_, _, err := rpmCapacity(fields)
 		return err
-	}}, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
-	// No extra fields: the page prompts for the API key only. Parse is the full
-	// ParseAuth pipeline (nvapi- check, RPM validation, duplicate-key guard).
-	login, err := kit.NewAPIKeyLogin(kit.APIKeyLoginConfig{Provider: provider, Parse: p.ParseAuth})
+	}}}
+	// No extra fields: the page prompts for the API key only, so the v0.4.0
+	// Secret field flag and FilenameFields (identities spanning extra fields)
+	// have nothing to attach to. Parse is the full ParseAuth pipeline
+	// (nvapi- check, RPM validation, duplicate-key guard).
+	login, err := kit.NewAPIKeyLogin(kit.APIKeyLoginConfig{Provider: provider, Parse: p.ParseAuth, SessionTTL: sessionTTL})
 	if err != nil {
 		return nil, err
 	}
@@ -112,15 +121,8 @@ func (p *authProvider) ParseAuth(ctx context.Context, r pluginapi.AuthParseReque
 		return pluginapi.AuthParseResponse{}, err
 	}
 	digest := sha256.Sum256([]byte(key))
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if file, ok := p.owners[digest]; ok && file != r.FileName {
-		return pluginapi.AuthParseResponse{}, &pluginabi.Error{Code: "duplicate_auth", Message: "the same API key is already configured in another auth file", HTTPStatus: 400}
+	if err := p.guard.Claim(ctx, r.FileName, digest); err != nil {
+		return pluginapi.AuthParseResponse{}, err
 	}
-	if old, ok := p.files[r.FileName]; ok && old != digest {
-		delete(p.owners, old)
-	}
-	p.files[r.FileName] = digest
-	p.owners[digest] = r.FileName
 	return out, nil
 }
