@@ -54,7 +54,8 @@ func fallbackModels() []pluginapi.ModelInfo {
 	return out
 }
 func modelInfo(id string) pluginapi.ModelInfo {
-	return pluginapi.ModelInfo{ID: modelPrefix + id, Object: "model", OwnedBy: provider, DisplayName: id}
+	served := serveID(id)
+	return pluginapi.ModelInfo{ID: served, Object: "model", OwnedBy: provider, DisplayName: id}
 }
 func (catalog) RegisterModels(context.Context, pluginapi.ModelRegistrationRequest) (pluginapi.ModelRegistrationResponse, error) {
 	return pluginapi.ModelRegistrationResponse{Provider: provider, Models: fallbackModels()}, nil
@@ -139,7 +140,12 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 	}
 	var wg sync.WaitGroup
 	for i, m := range candidates {
-		id := strings.TrimPrefix(m.ID, modelPrefix)
+		// Probes run against the upstream id, inverting the served one.
+		id, ok := upstreamID(m.ID)
+		if !ok {
+			alive[i] = false
+			continue
+		}
 		if v, ok := cache.get(tag, id); ok {
 			alive[i] = v
 			continue

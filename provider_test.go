@@ -65,7 +65,7 @@ func TestAuthIdentityDuplicatesAndRPMValidation(t *testing.T) {
 
 func TestBuildRequestStripsExactlyOneNamespace(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		got, err := buildRequest(context.Background(), pluginapi.ExecutorRequest{Stream: stream, Payload: []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","messages":[],"temperature":0.25,"custom":{"preserve":true},"stream":true}`), StorageJSON: []byte(`{"api_key":"nvapi-example"}`)})
+		got, err := buildRequest(context.Background(), pluginapi.ExecutorRequest{Stream: stream, Payload: []byte(`{"model":"nvidia/llama-3.3-nemotron-super-49b-v1.5","messages":[],"temperature":0.25,"custom":{"preserve":true},"stream":true}`), StorageJSON: []byte(`{"api_key":"nvapi-example"}`)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -114,7 +114,7 @@ func TestStaticModelsAreNamespacedAndRegistrarMatches(t *testing.T) {
 		}
 		// Fallbacks must not include IDs the hosted gateway reports as retired
 		// (410 end of life) or undeployed (404) as of the last live check.
-		for _, retired := range []string{"nvidia/meta/llama-3.1-8b-instruct", "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5"} {
+		for _, retired := range []string{"nvidia/meta/llama-3.1-8b-instruct", "nvidia/llama-3.3-nemotron-super-49b-v1.5"} {
 			if m.ID == retired {
 				t.Fatalf("fallback advertises retired model %q", m.ID)
 			}

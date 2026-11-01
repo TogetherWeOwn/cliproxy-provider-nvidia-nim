@@ -69,7 +69,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	q := newQuotaProvider()
 	c := newCatalog(q)
 	req := pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
-	want := "nvidia/ok/alive,nvidia/queued/pending,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/nvidia/also-alive"
+	want := "nvidia/ok/alive,nvidia/queued/pending,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/also-alive"
 	start := time.Now()
 	out, err := c.ModelsForAuth(context.Background(), req)
 	if err != nil {

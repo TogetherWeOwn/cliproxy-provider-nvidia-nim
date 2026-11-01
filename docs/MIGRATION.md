@@ -68,7 +68,7 @@ versioned install/replacement mechanism and supported hot reload.
   | Upstream model | New client model |
   | --- | --- |
   | `meta/llama-3.1-8b-instruct` | `nvidia/meta/llama-3.1-8b-instruct` |
-  | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5` |
+  | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/llama-3.3-nemotron-super-49b-v1.5` (already namespaced: passes through undoubled) |
   | `stepfun-ai/step-5-preview` | `nvidia/stepfun-ai/step-5-preview` |
 
 - Do not retain the old overlay's free-admission guards or scheduling settings

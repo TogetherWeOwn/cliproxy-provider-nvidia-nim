@@ -92,7 +92,7 @@ func TestExecutorCountsEachDispatchedRequestAndIgnoresInvalidLocalCalls(t *testi
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	q.now = func() time.Time { return now }
 	e := newExecutor(q)
-	req := pluginapi.ExecutorRequest{AuthID: "host-id", Payload: []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","stream":true}`), StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
+	req := pluginapi.ExecutorRequest{AuthID: "host-id", Payload: []byte(`{"model":"nvidia/llama-3.3-nemotron-super-49b-v1.5","stream":true}`), StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
 	// Going over configured capacity never gates native selection/execution.
 	for i := 0; i < 5; i++ {
 		out, err := e.Execute(context.Background(), req)
@@ -164,8 +164,11 @@ func TestStreamingIsIncrementalAndOneAttempt(t *testing.T) {
 		}
 		all.Write(c.Payload)
 	}
-	if !strings.Contains(all.String(), "[DONE]") {
-		t.Fatalf("stream %s", all.String())
+	// The kit re-frames to one data event per chunk and drops the SSE
+	// [DONE] marker (the host appends its own terminator): the stream ends
+	// by channel close. No request_path metadata means framed chunks.
+	if want := `data: {"choices":[{"delta":{"content":"hello"}}]}`; all.String() != want {
+		t.Fatalf("stream %q want %q", all.String(), want)
 	}
 	out, err := q.FetchQuota(ctx, quotaRequest("nvapi-example", 4))
 	if err != nil || out.Groups[0].Buckets[0].RemainingFraction != .75 {
@@ -224,7 +227,7 @@ func TestDiscoveryPrefixesDeduplicatesAndKeepsUpstreamNvidiaNamespace(t *testing
 	if err != nil || len(out.Models) != 2 {
 		t.Fatalf("discovery %+v %v", out, err)
 	}
-	if out.Models[0].ID != "nvidia/meta/llama-3.1-8b-instruct" || out.Models[1].ID != "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5" {
+	if out.Models[0].ID != "nvidia/meta/llama-3.1-8b-instruct" || out.Models[1].ID != "nvidia/llama-3.3-nemotron-super-49b-v1.5" {
 		t.Fatalf("namespaces %+v", out.Models)
 	}
 }

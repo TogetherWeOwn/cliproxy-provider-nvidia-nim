@@ -66,15 +66,16 @@ without calling NVIDIA and does not renew or rotate keys.
 
 ## Models and inference
 
-The fixed **`nvidia/`** prefix applies to every static and discovered model.
-Only one leading prefix is stripped before upstream dispatch. An upstream id
-that already starts with `nvidia/` would double the prefix and is refused at
-registration instead of being served bare.
+Every static and discovered model id carries the fixed **`nvidia/`**
+namespace exactly once. NVIDIA-owned upstream ids already start with
+`nvidia/`, so they pass through undoubled instead of being refused; any other
+upstream id gains exactly one prefix, and dispatch inverts the mapping.
 
 | Client ID | Upstream ID | Static fallback |
 | --- | --- | --- |
 | `nvidia/stepfun-ai/step-5-preview` | `stepfun-ai/step-5-preview` | Yes |
 | `nvidia/<organization>/<model>` | `<organization>/<model>` | Discovered |
+| `nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Discovered |
 
 Discovery uses `GET https://integrate.api.nvidia.com/v1/models` with Bearer auth.
 That list is a static catalog, **not per-account availability**: in a live check

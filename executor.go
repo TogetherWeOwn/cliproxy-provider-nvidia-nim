@@ -157,13 +157,17 @@ func buildRequest(_ context.Context, r pluginapi.ExecutorRequest) (pluginapi.HTT
 	if json.Unmarshal(r.Payload, &body) != nil || body == nil {
 		return pluginapi.HTTPRequest{}, &pluginabi.Error{Code: "invalid_request", Message: "payload must be a JSON object", HTTPStatus: 400}
 	}
-	var model string
-	if json.Unmarshal(body["model"], &model) != nil || !strings.HasPrefix(model, modelPrefix) || len(model) == len(modelPrefix) {
+	var served string
+	if json.Unmarshal(body["model"], &served) != nil {
 		return pluginapi.HTTPRequest{}, &pluginabi.Error{Code: "invalid_model", Message: "expected an nvidia/ model", HTTPStatus: 400}
 	}
-	// Strip exactly ONE provider prefix. NVIDIA-owned upstream IDs themselves
-	// begin nvidia/, so nvidia/nvidia/foo must become nvidia/foo, never foo.
-	body["model"], _ = json.Marshal(strings.TrimPrefix(model, modelPrefix))
+	// Invert the catalog mapping: third-party ids lose one prefix,
+	// NVIDIA-owned "nvidia/…" ids (which already carry it) pass through.
+	model, ok := upstreamID(served)
+	if !ok {
+		return pluginapi.HTTPRequest{}, &pluginabi.Error{Code: "invalid_model", Message: "expected an nvidia/ model", HTTPStatus: 400}
+	}
+	body["model"], _ = json.Marshal(model)
 	body["stream"], _ = json.Marshal(r.Stream)
 	raw, err := json.Marshal(body)
 	if err != nil {

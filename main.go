@@ -24,7 +24,7 @@ func makePlugin(host kit.Caller) (*kit.Runtime, error) {
 	models := newCatalog(quota)
 	return kit.New(kit.Definition{
 		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-nvidia-nim"},
-		ModelNamespace: "nvidia",
+		ModelNamespace: modelNamespace,
 		Configure:      configureBase,
 		Capabilities: pluginapi.Capabilities{
 			AuthProvider: newAuthProvider(), ModelRegistrar: models, ModelProvider: models,

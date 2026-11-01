@@ -181,7 +181,7 @@ func TestRealHostLoader(t *testing.T) {
 		}
 	}
 	discovered := host.ModelsForAuth(ctx, auth)
-	if !discovered.Handled || len(discovered.Models) != 2 || discovered.Models[1].ID != "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5" {
+	if !discovered.Handled || len(discovered.Models) != 2 || discovered.Models[1].ID != "nvidia/llama-3.3-nemotron-super-49b-v1.5" {
 		t.Fatalf("discovery %+v", discovered)
 	}
 	// Each discovered model is validated with one real one-token chat probe.
@@ -192,7 +192,7 @@ func TestRealHostLoader(t *testing.T) {
 	if !ok {
 		t.Fatal("executor not registered")
 	}
-	req := coreexec.Request{Model: "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5", Payload: []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","messages":[{"role":"user","content":"hello"}]}`), Format: translator.FormatOpenAI}
+	req := coreexec.Request{Model: "nvidia/llama-3.3-nemotron-super-49b-v1.5", Payload: []byte(`{"model":"nvidia/llama-3.3-nemotron-super-49b-v1.5","messages":[{"role":"user","content":"hello"}]}`), Format: translator.FormatOpenAI}
 	opts := coreexec.Options{SourceFormat: translator.FormatOpenAI, ResponseFormat: translator.FormatOpenAI}
 	resp, err := ex.Execute(ctx, auth, req, opts)
 	if err != nil || !strings.Contains(string(resp.Payload), `"content":"hello"`) || !strings.Contains(string(resp.Payload), `"object":"chat.completion"`) {
@@ -203,7 +203,7 @@ func TestRealHostLoader(t *testing.T) {
 	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .25 || quota.Groups[0].Buckets[0].ResetTime == "" {
 		t.Fatalf("dispatch accounting %+v %v", quota, err)
 	}
-	req.Payload = []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","stream":true,"fixture_gate":true}`)
+	req.Payload = []byte(`{"model":"nvidia/llama-3.3-nemotron-super-49b-v1.5","stream":true,"fixture_gate":true}`)
 	opts.Stream = true
 	stream, err := ex.ExecuteStream(ctx, auth, req, opts)
 	if err != nil {
@@ -226,8 +226,12 @@ func TestRealHostLoader(t *testing.T) {
 		}
 		chunks.Write(c.Payload)
 	}
-	if !strings.Contains(chunks.String(), "[DONE]") {
-		t.Fatalf("stream %s", chunks.String())
+	// The kit re-frames to one data event per chunk and drops the SSE
+	// [DONE] marker (the host appends its own terminator): the stream ends
+	// by channel close. The core-executor call carries no chat route, so
+	// the chunk stays data-framed.
+	if want := `data: {"id":"chat-example","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}`; chunks.String() != want {
+		t.Fatalf("stream %q want %q", chunks.String(), want)
 	}
 	quota, _, err = host.FetchQuota(ctx, quotaReq)
 	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != 0 {
@@ -238,7 +242,7 @@ func TestRealHostLoader(t *testing.T) {
 		status int
 		delay  time.Duration
 	}{{401, 0}, {402, time.Hour}, {403, 0}, {404, 0}, {429, 7 * time.Second}, {503, 7 * time.Second}} {
-		req.Payload, _ = json.Marshal(map[string]any{"model": "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5", "fixture_status": tc.status})
+		req.Payload, _ = json.Marshal(map[string]any{"model": "nvidia/llama-3.3-nemotron-super-49b-v1.5", "fixture_status": tc.status})
 		_, err = ex.Execute(ctx, auth, req, opts)
 		status, ok := err.(interface{ StatusCode() int })
 		if !ok || status.StatusCode() != tc.status {
@@ -276,7 +280,7 @@ func TestRealHostLoader(t *testing.T) {
 		second = second.Clone()
 		second.ID = "second-auth"
 		second.Status = coreauth.StatusActive
-		model := "nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5"
+		model := "nvidia/llama-3.3-nemotron-super-49b-v1.5"
 		for _, a := range []*coreauth.Auth{first, second} {
 			if _, err := mgr.Register(ctx, a); err != nil {
 				t.Fatal(err)
@@ -286,7 +290,7 @@ func TestRealHostLoader(t *testing.T) {
 		}
 		// Both direct and manager calls continue despite the first key's local RPM
 		// card being at zero: no Scheduler or preemptive quota avoidance exists.
-		call := coreexec.Request{Model: model, Payload: []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","fixture_status":429,"fixture_first_only":true}`), Format: translator.FormatOpenAI}
+		call := coreexec.Request{Model: model, Payload: []byte(`{"model":"nvidia/llama-3.3-nemotron-super-49b-v1.5","fixture_status":429,"fixture_first_only":true}`), Format: translator.FormatOpenAI}
 		for i := 0; i < 2; i++ {
 			if _, err := mgr.Execute(ctx, []string{"nvidia-nim"}, call, opts); err != nil {
 				t.Fatalf("native sibling failover %v", err)
