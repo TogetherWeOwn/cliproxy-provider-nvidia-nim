@@ -60,7 +60,8 @@ cannot observe other keys/processes/clients or silently establish independence.
   public-file checks follow [cliproxy-provider-synthetic](https://github.com/TogetherWeOwn/cliproxy-provider-synthetic/tree/b5eacd4f1375fec10419cdcab6c68709444e7424),
   commit `b5eacd4f1375fec10419cdcab6c68709444e7424`.
 - Shared C-ABI/RPC/auth/passthrough wiring uses the **published**
-  [cliproxy-provider-kit v0.1.0](https://github.com/TogetherWeOwn/cliproxy-provider-kit/tree/v0.1.0).
+  [cliproxy-provider-kit at commit `21069bf`](https://github.com/TogetherWeOwn/cliproxy-provider-kit/tree/21069bfec8f10dac7130d8a1dd82501fec662e4d)
+  (RPC schema 10).
   No module replacement or sibling checkout is required.
 - The earlier unreleased NVIDIA dirty diff was consulted only as historical
   design context, not treated as published wire documentation or current quota
@@ -69,7 +70,7 @@ cannot observe other keys/processes/clients or silently establish independence.
 
 ## Native host contracts
 
-Original [CLIProxyAPI v8.0.48](https://github.com/router-for-me/CLIProxyAPI/tree/v8.0.48):
+Original [CLIProxyAPI v8.0.49](https://github.com/router-for-me/CLIProxyAPI/tree/v8.0.49):
 
 - `sdk/pluginabi/types.go`: C-ABI/RPC envelopes, schema and retry hints.
 - `sdk/pluginapi/types.go`: auth/model/executor/quota SDK contracts.

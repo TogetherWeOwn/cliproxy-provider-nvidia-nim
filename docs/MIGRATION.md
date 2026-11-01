@@ -91,7 +91,7 @@ versioned install/replacement mechanism and supported hot reload.
 5. Verify native routing over legitimate distinct keys and sibling isolation
    after errors. Compare mock error tests against actual observed failure
    status/headers, without deliberately provoking credential failures.
-6. Explicitly accept or resolve the known v8.0.48 RPC transient-marker limitation
+6. Explicitly accept or resolve the known v8.0.49 RPC transient-marker limitation
    before cutover. The host carries status and Retry-After but marks rate-only
    429 as model quota-exceeded and drops RPC Retryable. The mock host-manager
    test proves short cooldown/sibling failover, not full transient/exhaustion
