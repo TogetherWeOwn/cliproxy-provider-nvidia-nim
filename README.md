@@ -118,8 +118,9 @@ aggregates the SSE (content, reasoning, tool-call fragments, usage) into one
 `chat.completion` JSON document; an upstream that ignores the
 flag and answers `application/json` is passed through after validation. An
 empty, non-JSON or truncated 2xx reply is a retryable 502, never a successful
-empty completion. `ExecuteStream` relays SSE incrementally, including `[DONE]`,
-without buffering to completion. Raw HTTP calls are constrained to this same
+empty completion. `ExecuteStream` relays incrementally without buffering to
+completion; the kit re-frames to one data event per chunk and drops the
+upstream `[DONE]` marker (the host appends its own terminator). Raw HTTP calls are constrained to this same
 endpoint and credentials; caller URLs/methods/headers cannot redirect the key.
 Local token counting is the kit's explicitly estimated count, not a model
 tokenizer or a billable NVIDIA operation.
