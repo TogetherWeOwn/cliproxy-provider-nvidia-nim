@@ -70,7 +70,7 @@ func TestServeUpstreamIDRoundTrip(t *testing.T) {
 	}
 }
 
-// Regression (Devin Review on TWO-683): a slashless third-party upstream id
+// Regression (Devin Review): a slashless third-party upstream id
 // is ambiguous under the serveID heuristic ("example-tiny" and
 // "nvidia/example-tiny" both serve as "nvidia/example-tiny"), so inversion
 // consults the registration ground truth first and the probe and dispatch

@@ -134,7 +134,7 @@ func TestNonStreamExecuteRejectsEmptyOrIncompleteSuccessBodies(t *testing.T) {
 	}
 }
 
-// Regression (Devin Review on TWO-683): the framed-chunk rewrite must keep
+// Regression (Devin Review): the framed-chunk rewrite must keep
 // the 32 MiB total bound. Each event below is a complete finished choice, so
 // only the bound can reject the oversize stream; the under-cap stream proves
 // the bound does not false-positive.
