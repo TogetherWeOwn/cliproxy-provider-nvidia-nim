@@ -84,7 +84,8 @@ versioned install/replacement mechanism and supported hot reload.
 3. Check the card is explicitly local RPM. With capacity configured and after
    a full observation window, verify inference attempts in the trailing 60s,
    unclipped used count, clamped remaining fraction and next-aging-out timestamp.
-   Omitted capacity must show the 40 RPM default labelled unofficial. Quota
+   Omitted capacity falls back to the unofficial 40 RPM default with no card
+   label. Quota
    fetch must make no provider request and reset must be unsupported.
 4. With authorization, make one small stream and one non-stream request on an
    entitled model. Verify incremental streaming, host proxy policy, response

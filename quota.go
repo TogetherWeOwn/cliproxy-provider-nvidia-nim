@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"fmt"
 	"sync"
 	"time"
 
@@ -74,13 +73,9 @@ func (q *quotaProvider) FetchQuota(ctx context.Context, r pluginapi.QuotaFetchRe
 	if err != nil {
 		return pluginapi.QuotaFetchResponse{}, err
 	}
-	capacity, configured, err := rpmCapacity(fields)
+	capacity, _, err := rpmCapacity(fields)
 	if err != nil {
 		return pluginapi.QuotaFetchResponse{}, err
-	}
-	capacityNote, capacityLabel := "capacity is this auth file's requests_per_minute", "Configured capacity"
-	if !configured {
-		capacityNote, capacityLabel = fmt.Sprintf("capacity is the unofficial %d RPM free-tier default (NVIDIA publishes no fixed number; set requests_per_minute)", defaultRequestsPerMinute), "Default capacity (unofficial)"
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -88,16 +83,12 @@ func (q *quotaProvider) FetchQuota(ctx context.Context, r pluginapi.QuotaFetchRe
 	history := q.recent[sha256.Sum256([]byte(key))]
 	used := len(history)
 	fraction := max(0, 1-float64(used)/float64(capacity))
-	bucket := pluginapi.QuotaBucket{Window: "per-minute", RemainingFraction: fraction, Description: "Local inference attempts in the trailing 60 seconds, not a provider balance; " + capacityNote + ". Reset is the next request aging out, not a full refill."}
+	bucket := pluginapi.QuotaBucket{Window: "Requests per minute", RemainingFraction: fraction}
 	if used > 0 {
 		bucket.ResetTime = history[0].Add(time.Minute).UTC().Format(time.RFC3339Nano)
 	}
 	return pluginapi.QuotaFetchResponse{
-		Groups: []pluginapi.QuotaGroup{{DisplayName: "NVIDIA NIM — local RPM", Buckets: []pluginapi.QuotaBucket{bucket}}},
-		Summary: []pluginapi.QuotaMetric{
-			{Key: "requests_used", Label: "Local requests (60s)", Value: float64(used), Unit: "requests", Format: "number"},
-			{Key: "requests_per_minute", Label: capacityLabel, Value: float64(capacity), Unit: "RPM", Format: "number"},
-		},
+		Groups: []pluginapi.QuotaGroup{{DisplayName: "NVIDIA NIM", Buckets: []pluginapi.QuotaBucket{bucket}}},
 	}, nil
 }
 func (*quotaProvider) ResetQuota(context.Context, pluginapi.QuotaResetRequest) (pluginapi.QuotaResetResponse, error) {

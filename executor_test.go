@@ -100,7 +100,7 @@ func TestExecutorCountsEachDispatchedRequestAndIgnoresInvalidLocalCalls(t *testi
 			t.Fatalf("execute %s %v", out.Payload, err)
 		}
 	}
-	requireQuota(t, q, quotaRequest("nvapi-example", 4), 5, 4, 0, "2030-01-01T00:01:00Z")
+	requireQuota(t, q, quotaRequest("nvapi-example", 4), 0, "2030-01-01T00:01:00Z")
 	if _, err := e.CountTokens(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestExecutorCountsEachDispatchedRequestAndIgnoresInvalidLocalCalls(t *testi
 	if _, err := e.Execute(context.Background(), req); err == nil {
 		t.Fatal("missing host transport accepted")
 	}
-	requireQuota(t, q, quotaRequest("nvapi-example", 4), 5, 4, 0, "2030-01-01T00:01:00Z")
+	requireQuota(t, q, quotaRequest("nvapi-example", 4), 0, "2030-01-01T00:01:00Z")
 }
 
 func TestStreamingIsIncrementalAndOneAttempt(t *testing.T) {
