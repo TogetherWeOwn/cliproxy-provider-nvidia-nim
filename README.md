@@ -66,10 +66,12 @@ without calling NVIDIA and does not renew or rotate keys.
 
 ## Management-UI login
 
-The management UI's login card serves a kit login page that prompts for the
+The management UI's login card serves a kit login page that displays a shell
+block. Paste it into `bash` or `zsh`; the terminal then prompts for the
 `nvapi-` API key, then submits it over an authenticated management POST
-(secrets travel in the POST body only, never in URLs, logs or process
-arguments). The submission runs the same ParseAuth validation and duplicate-key
+(the API key travels in the POST body and the management key in the
+`Authorization` header, never in URLs, logs or process arguments). The
+submission runs the same ParseAuth validation and duplicate-key
 guard as an uploaded auth file, so submitting the same key twice is idempotent.
 On a remote host, set `CLIPROXY_BASE` to an `https://` base so the key is
 encrypted in transit. Login without a host base URL still fails.
