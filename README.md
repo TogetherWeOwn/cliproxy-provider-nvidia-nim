@@ -2,8 +2,11 @@
 
 First-class NVIDIA API-key auth files, namespaced OpenAI-compatible chat models,
 incremental streaming and **display-only local requests-per-minute quota cards**.
-Uses the published [`cliproxy-provider-kit` v0.1.0](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-and the original **CLIProxyAPI v8.0.48 C-ABI host** (ABI 1 / RPC schema 9).
+Uses [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
+at commit `c81b686` (pseudo-version `v0.1.1-0.20261101051030-c81b68654d02`)
+and is tested against the original **CLIProxyAPI v8.0.48 C-ABI host** (ABI 1 /
+RPC schema 9). The kit answers schema 9 and also registers on newer hosts
+(RPC schema 10, CLIProxyAPI v8.0.49); it refuses only older hosts.
 
 Multiple distinct-key auth files use native round-robin/weighted/fill-first
 routing and native cooldowns. There is **no Scheduler**, local admission gate,
@@ -207,7 +210,7 @@ nm -D <output-dir>/nvidia-nim.so | grep cliproxy_plugin_init
 bash scripts/package-release.sh <output-dir>
 ```
 
-Packaging creates `nvidia-nim_0.1.1_linux_amd64.zip` containing `nvidia-nim.so`
+Packaging creates `nvidia-nim_0.1.2_linux_amd64.zip` containing `nvidia-nim.so`
 and `LICENSE`, plus `checksums.txt`. It checks the C-ABI symbol and rejects
 libraries importing GLIBC versions newer than **2.34** or private GLIBC symbols.
 Publish both files together in the matching release; schema-v1 `registry.json`
