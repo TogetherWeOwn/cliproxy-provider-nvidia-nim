@@ -3,10 +3,11 @@
 First-class NVIDIA API-key auth files, namespaced OpenAI-compatible chat models,
 incremental streaming and **display-only local requests-per-minute quota cards**.
 Uses [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at commit `c81b686` (pseudo-version `v0.1.1-0.20261101051030-c81b68654d02`)
-and is tested against the original **CLIProxyAPI v8.0.48 C-ABI host** (ABI 1 /
-RPC schema 9). The kit answers schema 9 and also registers on newer hosts
-(RPC schema 10, CLIProxyAPI v8.0.49); it refuses only older hosts.
+at commit `21069bf` (pseudo-version `v0.1.1-0.20261101054300-21069bfec8f1`)
+and is tested against the original **CLIProxyAPI v8.0.49 C-ABI host** (ABI 1 /
+RPC schema 10). Requires CLIProxyAPI v8.0.49 or newer: the kit answers schema 10
+and refuses hosts older than schema 10. The plugin declares no multi-auth
+providers, so the host treats it as a single-auth plugin.
 
 Multiple distinct-key auth files use native round-robin/weighted/fill-first
 routing and native cooldowns. There is **no Scheduler**, local admission gate,
@@ -181,7 +182,7 @@ account emits that shape. Generic “request quota per minute exceeded” stays 
 short rate limit. The plugin never latches local exhaustion or rewrites status
 codes to influence routing.
 
-### Verified v8.0.48 RPC limitation
+### Verified v8.0.49 RPC limitation
 
 `internal/pluginhost/rpc_client.go` preserves HTTP status and retry timing, but
 not the RPC `retryable` flag or the native transient-rate-limit marker. The real
@@ -210,7 +211,7 @@ nm -D <output-dir>/nvidia-nim.so | grep cliproxy_plugin_init
 bash scripts/package-release.sh <output-dir>
 ```
 
-Packaging creates `nvidia-nim_0.1.2_linux_amd64.zip` containing `nvidia-nim.so`
+Packaging creates `nvidia-nim_0.1.3_linux_amd64.zip` containing `nvidia-nim.so`
 and `LICENSE`, plus `checksums.txt`. It checks the C-ABI symbol and rejects
 libraries importing GLIBC versions newer than **2.34** or private GLIBC symbols.
 Publish both files together in the matching release; schema-v1 `registry.json`

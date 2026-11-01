@@ -42,7 +42,7 @@ func (models) UnregisterClient(string)                              {}
 func (models) GetModelProviders(string) []string                    { return nil }
 
 // Adapted from the Synthetic provider's reviewed real-loader harness. This is
-// the ORIGINAL pinned v8.0.48 host, not a stub loader or locally patched fork.
+// the ORIGINAL pinned v8.0.49 host, not a stub loader or locally patched fork.
 // Only the provider's upstream HTTP service is an httptest mock.
 func TestRealHostLoader(t *testing.T) {
 	var inference atomic.Int32
@@ -141,7 +141,7 @@ func TestRealHostLoader(t *testing.T) {
 		t.Fatalf("registration %+v", host.RegisteredPlugins())
 	}
 	info := host.RegisteredPlugins()
-	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.1.2" {
+	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.1.3" {
 		t.Fatalf("metadata %+v", info)
 	}
 	auth, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: "example.json", RawJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-example-key","requests_per_minute":4,"label":"Example"}`)})
@@ -301,12 +301,12 @@ func TestRealHostLoader(t *testing.T) {
 		if healthy.Unavailable || healthy.Quota.Exceeded {
 			t.Fatalf("healthy sibling impaired %+v", healthy)
 		}
-		// v8.0.48 rpcError carries status/retry timing but drops Retryable and the
+		// v8.0.49 rpcError carries status/retry timing but drops Retryable and the
 		// native transient-rate-limit marker. Characterize, do not patch/disguise.
 		if !state.Quota.Exceeded {
 			t.Fatal("pinned host changed its 429 quota marker; revisit documented limitation")
 		}
-		t.Log("v8.0.48 maps rate-only RPC 429 to model quota state, preserving short Retry-After")
+		t.Log("v8.0.49 maps rate-only RPC 429 to model quota state, preserving short Retry-After")
 	})
 }
 
@@ -316,7 +316,7 @@ func TestRegistryUsesNativeStoreSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg, err := pluginstore.ParseRegistry(raw)
-	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.1.2" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
+	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.1.3" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
 		t.Fatalf("registry %+v %v", reg, err)
 	}
 }
