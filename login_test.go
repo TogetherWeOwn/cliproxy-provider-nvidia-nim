@@ -4,7 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
@@ -16,8 +18,13 @@ const (
 
 func startTestLogin(t *testing.T) (*authProvider, pluginapi.AuthLoginStartResponse) {
 	t.Helper()
+	return startTestLoginTTL(t, 0)
+}
+
+func startTestLoginTTL(t *testing.T, sessionTTL time.Duration) (*authProvider, pluginapi.AuthLoginStartResponse) {
+	t.Helper()
 	ctx := context.Background()
-	p, err := newAuthProvider()
+	p, err := newAuthProviderWithLoginTTL(sessionTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +63,10 @@ func startTestLogin(t *testing.T) (*authProvider, pluginapi.AuthLoginStartRespon
 func TestAPIKeyLoginWired(t *testing.T) {
 	ctx := context.Background()
 	p, start := startTestLogin(t)
-	if !strings.HasPrefix(start.URL, "http://127.0.0.1:19000"+testResourceBase+"/login?state=") {
+	// Kit v0.4.0+ returns a root-relative login URL: the panel resolves it
+	// against its own origin, since the host's loopback callback base cannot
+	// be loaded by a remote operator's browser.
+	if !strings.HasPrefix(start.URL, testResourceBase+"/login?state=") {
 		t.Fatalf("unexpected login URL %q", start.URL)
 	}
 	poll, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
@@ -85,6 +95,66 @@ func TestAPIKeyLoginWired(t *testing.T) {
 	again, err := p.PollLogin(ctx, pluginapi.AuthLoginPollRequest{State: start.State})
 	if err != nil || again.Status != pluginapi.AuthLoginStatusPending {
 		t.Fatalf("consumed login redelivered: %+v %v", again, err)
+	}
+}
+
+// TestLoginAbandonedSubmitReleasesOwnership mirrors the kit regression for
+// abandoned API-key logins (kit #13): the login-validation parse is
+// provisional, so submitting a key and never polling must hold filename
+// ownership only until the login session expires. After that, parsing the
+// same key under a different filename succeeds instead of duplicate_auth.
+func TestLoginAbandonedSubmitReleasesOwnership(t *testing.T) {
+	ctx := context.Background()
+	// The kit guard's clock is not injectable from outside the kit, so use a
+	// short real session TTL and retry the upload parse until the
+	// reservation lapses instead of sleeping a fixed duration.
+	p, start := startTestLoginTTL(t, time.Second)
+	submit, err := p.Login.HandleManagement(ctx, pluginapi.ManagementRequest{Method: "POST",
+		Path: testSubmitPath,
+		Body: []byte(`{"state":"` + start.State + `","api_key":"nvapi-examplekey"}`)})
+	if err != nil || submit.StatusCode != 200 {
+		t.Fatalf("submit %+v %v", submit, err)
+	}
+	// Abandon the login: never poll it.
+	upload := func() error {
+		_, err := p.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim",
+			FileName: "upload.json",
+			RawJSON:  []byte(`{"type":"nvidia-nim","api_key":"nvapi-examplekey"}`)})
+		return err
+	}
+	// The in-flight login still blocks a different filename.
+	if err := upload(); err == nil || kit.MapError(err).Code != "duplicate_auth" {
+		t.Fatalf("upload during login = %v, want duplicate_auth", err)
+	}
+	// Once the abandoned session has expired the same upload owns the key.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		err := upload()
+		if err == nil {
+			break
+		}
+		if kit.MapError(err).Code != "duplicate_auth" {
+			t.Fatalf("upload after abandon = %v, want success or duplicate_auth while reserved", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("abandoned login still owns the key after its session expired")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	// Submit-time duplicate feedback still works against the committed owner.
+	second, err := p.StartLogin(ctx, pluginapi.AuthLoginStartRequest{Provider: "nvidia-nim",
+		BaseURL: testBaseURL, Host: pluginapi.HostConfigSummary{AuthDir: "/tmp/nvidia-auth"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	submit, err = p.Login.HandleManagement(ctx, pluginapi.ManagementRequest{Method: "POST",
+		Path: testSubmitPath,
+		Body: []byte(`{"state":"` + second.State + `","api_key":"nvapi-examplekey"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submit.StatusCode != 400 || !strings.Contains(string(submit.Body), "duplicate_auth") {
+		t.Fatalf("duplicate submit %+v", submit)
 	}
 }
 
