@@ -68,7 +68,7 @@ versioned install/replacement mechanism and supported hot reload.
   | Upstream model | New client model |
   | --- | --- |
   | `meta/llama-3.1-8b-instruct` | `nvidia/meta/llama-3.1-8b-instruct` |
-  | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5` |
+  | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/llama-3.3-nemotron-super-49b-v1.5` (already namespaced: passes through undoubled) |
   | `stepfun-ai/step-5-preview` | `nvidia/stepfun-ai/step-5-preview` |
 
 - Do not retain the old overlay's free-admission guards or scheduling settings
@@ -79,7 +79,8 @@ versioned install/replacement mechanism and supported hot reload.
 
 1. Confirm parse, persistence, stable key fingerprint and duplicate-file rejection.
 2. Confirm discovery registers fixed-prefixed IDs and strips exactly one leading
-   prefix for upstream, including an NVIDIA-owned model's double namespace.
+   prefix for upstream. NVIDIA-owned ids pass through undoubled (see the table
+   above); a doubled `nvidia/nvidia/…` id is rejected, never served.
 3. Check the card is explicitly local RPM. With capacity configured and after
    a full observation window, verify inference attempts in the trailing 60s,
    unclipped used count, clamped remaining fraction and next-aging-out timestamp.

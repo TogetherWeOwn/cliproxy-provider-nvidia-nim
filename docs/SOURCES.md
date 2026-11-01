@@ -19,7 +19,7 @@ guarantees, and no test depends on them.
 | Catalog is not account availability | Live check 2026-10-31 | `GET /v1/models` listed 85 IDs; a one-token chat probe returned 404 "Function ... not found" for 60; a retired former fallback answered 410 "end of life". Basis for probe validation in `ModelsForAuth`. |
 | `GET https://integrate.api.nvidia.com/v1/models` | [NVIDIA NIM Operator: Managing NeMo Guardrails](https://docs.nvidia.com/nim-operator/latest/guardrail.html) | Explicitly links that hosted model-list endpoint. It does not document a numerical RPM entitlement or prove current per-key model access. |
 | Expected OpenAI model-list JSON `data[].id` | [OpenAI models/list reference](https://platform.openai.com/docs/api-reference/models/list), NVIDIA's OpenAI-compatible chat references above | Compatibility expectation, **pending live NVIDIA catalog-schema verification**. NVIDIA's hosted list-endpoint link alone does not establish its current full response schema. Invalid/unusable catalogs fall back to static IDs. |
-| Removed static `meta/llama-3.1-8b-instruct`, `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Live check 2026-10-31 | The first answered 410 "reached its end of life on 2026-08-26"; the second is no longer in the hosted catalog. The NVIDIA-owned namespace rule (`nvidia/nvidia/...`) is still enforced for discovered IDs. |
+| Removed static `meta/llama-3.1-8b-instruct`, `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Live check 2026-10-31 | The first answered 410 "reached its end of life on 2026-08-26"; the second is no longer in the hosted catalog. NVIDIA-owned `nvidia/...` upstream IDs already carry the namespace, so they are served undoubled; any other doubled id is still dropped by the kit. |
 | Static `stepfun-ai/step-5-preview` | Step-5 inference reference above | Published ID, not a current free access/production-rights assertion. |
 | 401 missing/invalid key, 402 insufficient API credits, 429 request rate limit exceeded, 400/422 validation | Step-5 inference reference above | Other 403/auth and 404/not-found handling follows HTTP semantics. Actual NVIDIA credit/trial message variants remain pending live verification. |
 | Per-model/account-dependent request limits; no official universal free-tier RPM | [Official NVIDIA NIM FAQ](https://forums.developer.nvidia.com/t/nvidia-nim-faq/300317), [General FAQ](https://docs.api.nvidia.com/nim/docs/product) | The FAQ says the request rate varies by model and concurrent users and directs users to their signed-in account at build.nvidia.com. It gives no number. |
@@ -60,8 +60,8 @@ cannot observe other keys/processes/clients or silently establish independence.
   public-file checks follow [cliproxy-provider-synthetic](https://github.com/TogetherWeOwn/cliproxy-provider-synthetic/tree/b5eacd4f1375fec10419cdcab6c68709444e7424),
   commit `b5eacd4f1375fec10419cdcab6c68709444e7424`.
 - Shared C-ABI/RPC/auth/passthrough wiring uses the **published**
-  [cliproxy-provider-kit at commit `21069bf`](https://github.com/TogetherWeOwn/cliproxy-provider-kit/tree/21069bfec8f10dac7130d8a1dd82501fec662e4d)
-  (RPC schema 10).
+  [cliproxy-provider-kit at commit `88850ce`](https://github.com/TogetherWeOwn/cliproxy-provider-kit/tree/88850ce995e6eabf88efc1bf60bdd6817f5bee5b)
+  (pseudo-version `v0.1.1-0.20261101115341-88850ce995e6`, RPC schema 10).
   No module replacement or sibling checkout is required.
 - The earlier unreleased NVIDIA dirty diff was consulted only as historical
   design context, not treated as published wire documentation or current quota

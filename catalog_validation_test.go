@@ -69,7 +69,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	q := newQuotaProvider()
 	c := newCatalog(q)
 	req := pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
-	want := "nvidia/ok/alive,nvidia/queued/pending,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/nvidia/also-alive"
+	want := "nvidia/ok/alive,nvidia/queued/pending,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/also-alive"
 	start := time.Now()
 	out, err := c.ModelsForAuth(context.Background(), req)
 	if err != nil {
@@ -196,5 +196,59 @@ func TestConcurrentDiscoveriesShareTheProbeLimit(t *testing.T) {
 	wg.Wait()
 	if peak > probeConcurrency {
 		t.Fatalf("peak concurrent probes %d > %d", peak, probeConcurrency)
+	}
+}
+
+// Regression (Devin Review): two upstream ids can share one served id
+// ("twincollide" and "nvidia/twincollide" both serve as
+// "nvidia/twincollide"). Each candidate must be probed against its own
+// upstream id, and validation must advertise the working namesake exactly
+// once — in both catalog orders — with dispatch following the survivor.
+func TestValidateDedupesCollidingServedIDs(t *testing.T) {
+	for _, order := range [][]string{
+		{"twincollide", "nvidia/twincollide"},
+		{"nvidia/twincollide", "twincollide"},
+	} {
+		var mu sync.Mutex
+		probed := map[string]int{}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/models" {
+				io.WriteString(w, `{"data":[{"id":"`+order[0]+`"},{"id":"`+order[1]+`"}]}`)
+				return
+			}
+			var body map[string]any
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			id, _ := body["model"].(string)
+			mu.Lock()
+			probed[id]++
+			mu.Unlock()
+			if id == "twincollide" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"p\"}}]}\n\n")
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}))
+		c := newCatalog(newQuotaProvider())
+		out, err := c.ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
+		server.Close()
+		if err != nil {
+			t.Fatalf("order %v: %v", order, err)
+		}
+		if got := ids(out.Models); got != "nvidia/twincollide" {
+			t.Fatalf("order %v: advertised %q, want only the working namesake", order, got)
+		}
+		mu.Lock()
+		twincollide, namespaced := probed["twincollide"], probed["nvidia/twincollide"]
+		mu.Unlock()
+		if twincollide != 1 || namespaced != 1 {
+			t.Fatalf("order %v: each namesake must be probed once against itself, got %v", order, probed)
+		}
+		if got, ok := upstreamID("nvidia/twincollide"); !ok || got != "nvidia/twincollide" {
+			t.Fatalf("order %v: dispatch resolves to %q, want the surviving upstream id", order, got)
+		}
 	}
 }

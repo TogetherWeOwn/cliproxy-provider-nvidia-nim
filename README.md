@@ -3,7 +3,7 @@
 First-class NVIDIA API-key auth files, namespaced OpenAI-compatible chat models,
 incremental streaming and **display-only local requests-per-minute quota cards**.
 Uses [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at commit `21069bf` (pseudo-version `v0.1.1-0.20261101054300-21069bfec8f1`)
+at commit `88850ce` (pseudo-version `v0.1.1-0.20261101115341-88850ce995e6`)
 and is tested against the original **CLIProxyAPI v8.0.49 C-ABI host** (ABI 1 /
 RPC schema 10). Requires CLIProxyAPI v8.0.49 or newer: the kit answers schema 10
 and refuses hosts older than schema 10. The plugin declares no multi-auth
@@ -60,20 +60,22 @@ and re-enable it using native hot configuration reload after moving the file;
 do not copy a still-owned key to a second filename.
 
 Optional native fields include `prefix`, `proxy_url`, `weight`, `priority`,
-`label` and `disabled`. Auth `prefix` does not replace the fixed model namespace.
-Login/poll are API-key-only errors; refresh preserves storage without calling
-NVIDIA and does not renew or rotate keys.
+`label` and `disabled`. Fixed model namespace `nvidia/`; auth `prefix` does
+not replace it. Login/poll are API-key-only errors; refresh preserves storage
+without calling NVIDIA and does not renew or rotate keys.
 
 ## Models and inference
 
-The fixed **`nvidia/`** prefix applies to every static and discovered model.
-Only one leading prefix is stripped before upstream dispatch, including when
-the upstream model itself starts with `nvidia/`.
+Every static and discovered model id carries the fixed **`nvidia/`**
+namespace exactly once. NVIDIA-owned upstream ids already start with
+`nvidia/`, so they pass through undoubled instead of being refused; any other
+upstream id gains exactly one prefix, and dispatch inverts the mapping.
 
 | Client ID | Upstream ID | Static fallback |
 | --- | --- | --- |
 | `nvidia/stepfun-ai/step-5-preview` | `stepfun-ai/step-5-preview` | Yes |
 | `nvidia/<organization>/<model>` | `<organization>/<model>` | Discovered |
+| `nvidia/llama-3.3-nemotron-super-49b-v1.5` | `nvidia/llama-3.3-nemotron-super-49b-v1.5` | Discovered |
 
 Discovery uses `GET https://integrate.api.nvidia.com/v1/models` with Bearer auth.
 That list is a static catalog, **not per-account availability**: in a live check
@@ -116,8 +118,9 @@ aggregates the SSE (content, reasoning, tool-call fragments, usage) into one
 `chat.completion` JSON document; an upstream that ignores the
 flag and answers `application/json` is passed through after validation. An
 empty, non-JSON or truncated 2xx reply is a retryable 502, never a successful
-empty completion. `ExecuteStream` relays SSE incrementally, including `[DONE]`,
-without buffering to completion. Raw HTTP calls are constrained to this same
+empty completion. `ExecuteStream` relays incrementally without buffering to
+completion; the kit re-frames to one data event per chunk and drops the
+upstream `[DONE]` marker (the host appends its own terminator). Raw HTTP calls are constrained to this same
 endpoint and credentials; caller URLs/methods/headers cannot redirect the key.
 Local token counting is the kit's explicitly estimated count, not a model
 tokenizer or a billable NVIDIA operation.

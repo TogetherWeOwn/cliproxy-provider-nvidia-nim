@@ -134,6 +134,33 @@ func TestNonStreamExecuteRejectsEmptyOrIncompleteSuccessBodies(t *testing.T) {
 	}
 }
 
+// Regression (Devin Review): the framed-chunk rewrite must keep
+// the 32 MiB total bound. Each event below is a complete finished choice, so
+// only the bound can reject the oversize stream; the under-cap stream proves
+// the bound does not false-positive. The channel is unbuffered: the feeder
+// goroutine and the draining aggregator rendezvous per chunk, so the 33 MiB
+// oversize run never sits buffered in memory.
+func TestAggregateSSERejectsOversizeStreams(t *testing.T) {
+	event := `{"choices":[{"index":0,"delta":{"content":"` + strings.Repeat("x", 1<<20) + `"},"finish_reason":"stop"}]}`
+	run := func(n int) error {
+		chunks := make(chan pluginapi.ExecutorStreamChunk)
+		go func() {
+			defer close(chunks)
+			for i := 0; i < n; i++ {
+				chunks <- pluginapi.ExecutorStreamChunk{Payload: []byte(event)}
+			}
+		}()
+		_, err := aggregateSSE(context.Background(), chunks)
+		return err
+	}
+	if err := run(31); err != nil {
+		t.Fatalf("under-cap stream rejected: %v", err)
+	}
+	if err := run(33); err == nil {
+		t.Fatal("oversize stream accepted")
+	}
+}
+
 func TestNonStreamExecuteClassifiesEmptyGatewayTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Nvcf-Status", "errored")
