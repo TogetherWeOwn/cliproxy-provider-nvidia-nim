@@ -99,7 +99,7 @@ func TestPrepareHTTPIgnoresCallerDestinationsAndCredentials(t *testing.T) {
 }
 
 func TestStaticModelsAreNamespacedAndRegistrarMatches(t *testing.T) {
-	c := newCatalog(nil)
+	c := newCatalog()
 	out, err := c.StaticModels(context.Background(), pluginapi.StaticModelRequest{})
 	if err != nil || len(out.Models) == 0 {
 		t.Fatalf("static models %+v %v", out, err)

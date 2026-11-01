@@ -141,7 +141,7 @@ func TestRealHostLoader(t *testing.T) {
 		t.Fatalf("registration %+v", host.RegisteredPlugins())
 	}
 	info := host.RegisteredPlugins()
-	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.1.3" {
+	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.1.4" {
 		t.Fatalf("metadata %+v", info)
 	}
 	auth, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: "example.json", RawJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-example-key","requests_per_minute":4,"label":"Example"}`)})
@@ -185,6 +185,7 @@ func TestRealHostLoader(t *testing.T) {
 		t.Fatalf("discovery %+v", discovered)
 	}
 	// Each discovered model is validated with one real one-token chat probe.
+	// Probes dispatch upstream but do not count on the local RPM card.
 	if inference.Load() != 2 {
 		t.Fatalf("validation probes %d", inference.Load())
 	}
@@ -198,9 +199,10 @@ func TestRealHostLoader(t *testing.T) {
 	if err != nil || !strings.Contains(string(resp.Payload), `"content":"hello"`) || !strings.Contains(string(resp.Payload), `"object":"chat.completion"`) {
 		t.Fatalf("execute %s %v", resp.Payload, err)
 	}
-	// 2 validation probes + 1 dispatch against a configured capacity of 4.
+	// 1 dispatch against a configured capacity of 4; the 2 validation
+	// probes dispatch upstream but are excluded from the quota card.
 	quota, _, err = host.FetchQuota(ctx, quotaReq)
-	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .25 || quota.Groups[0].Buckets[0].ResetTime == "" {
+	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .75 || quota.Groups[0].Buckets[0].ResetTime == "" {
 		t.Fatalf("dispatch accounting %+v %v", quota, err)
 	}
 	req.Payload = []byte(`{"model":"nvidia/nvidia/llama-3.3-nemotron-super-49b-v1.5","stream":true,"fixture_gate":true}`)
@@ -229,8 +231,10 @@ func TestRealHostLoader(t *testing.T) {
 	if !strings.Contains(chunks.String(), "[DONE]") {
 		t.Fatalf("stream %s", chunks.String())
 	}
+	// 2 counted dispatches (non-streaming execute + stream) of capacity 4;
+	// validation probes are excluded from the card.
 	quota, _, err = host.FetchQuota(ctx, quotaReq)
-	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != 0 {
+	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .5 {
 		t.Fatalf("stream double-count %+v %v", quota, err)
 	}
 	opts.Stream = false
@@ -316,7 +320,7 @@ func TestRegistryUsesNativeStoreSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg, err := pluginstore.ParseRegistry(raw)
-	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.1.3" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
+	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.1.4" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
 		t.Fatalf("registry %+v %v", reg, err)
 	}
 }

@@ -32,14 +32,13 @@ const (
 
 type catalog struct {
 	cache *verdictCache
-	quota *quotaProvider
 	// probes is shared by every discovery so overlapping ModelsForAuth calls
 	// stay within probeConcurrency in total.
 	probes chan struct{}
 }
 
-func newCatalog(q *quotaProvider) catalog {
-	return catalog{cache: newVerdictCache(), quota: q, probes: make(chan struct{}, probeConcurrency)}
+func newCatalog() catalog {
+	return catalog{cache: newVerdictCache(), probes: make(chan struct{}, probeConcurrency)}
 }
 
 // Fallback IDs are published chat models, not an entitlement/free-tier claim.
@@ -125,8 +124,10 @@ func discover(ctx context.Context, client pluginapi.HostHTTPClient, key string) 
 }
 
 // validate drops candidates the gateway definitively rejects for this key and
-// keeps catalog order. Each probe is a real one-token chat dispatch, so it is
-// counted on the display-only quota card like any other request.
+// keeps catalog order. Each probe is a real one-token chat dispatch upstream,
+// but probes are deliberately NOT counted on the display-only quota card: at
+// connector sync scale a full discovery would otherwise consume most of the
+// 40 RPM minute it is meant to measure. Only executor dispatches count.
 func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, key string, candidates []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
 	budget, cancel := context.WithTimeout(ctx, discoveryBudget)
 	defer cancel()
@@ -154,7 +155,6 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 				return
 			}
 			defer func() { <-sem }()
-			c.quota.record(key)
 			usable, definitive := probeModel(budget, client, key, id)
 			alive[i] = usable
 			if definitive {

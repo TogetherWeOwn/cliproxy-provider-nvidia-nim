@@ -67,7 +67,7 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 	}))
 	defer server.Close()
 	q := newQuotaProvider()
-	c := newCatalog(q)
+	c := newCatalog()
 	req := pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
 	want := "nvidia/ok/alive,nvidia/queued/pending,nvidia/busy/rate-limited,nvidia/flaky/server-error,nvidia/slow/no-headers,nvidia/nvidia/also-alive"
 	start := time.Now()
@@ -82,8 +82,8 @@ func TestModelsForAuthAdvertisesOnlyModelsTheGatewayAccepts(t *testing.T) {
 		t.Fatalf("validation took %s; slow probes must be bounded", elapsed)
 	}
 	quota, err := q.FetchQuota(context.Background(), quotaRequest("nvapi-example", 100))
-	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != .89 {
-		t.Fatalf("each probe is a real dispatch and must be counted: %+v %v", quota, err)
+	if err != nil || quota.Groups[0].Buckets[0].RemainingFraction != 1 || quota.Groups[0].Buckets[0].ResetTime != "" {
+		t.Fatalf("discovery probes must not consume the quota they measure: %+v %v", quota, err)
 	}
 	// A reload within the inconclusive TTL re-probes nothing.
 	out, err = c.ModelsForAuth(context.Background(), req)
@@ -139,7 +139,7 @@ func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, err := newCatalog(nil).ModelsForAuth(ctx, pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
+	_, err := newCatalog().ModelsForAuth(ctx, pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
 	if err == nil {
 		t.Fatal("cancelled discovery returned a catalog")
 	}
@@ -181,7 +181,7 @@ func TestConcurrentDiscoveriesShareTheProbeLimit(t *testing.T) {
 		io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
-	c := newCatalog(nil)
+	c := newCatalog()
 	var wg sync.WaitGroup
 	for _, key := range []string{"nvapi-one", "nvapi-two"} {
 		wg.Add(1)
