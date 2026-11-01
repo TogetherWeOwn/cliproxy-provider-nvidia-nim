@@ -43,11 +43,12 @@ the build.nvidia.com free-tier limit developers report seeing on their account
 [official FAQ](https://forums.developer.nvidia.com/t/nvidia-nim-faq/300317)
 publishes **no** fixed number: it says the rate varies per model and with
 concurrent users, and points to the signed-in account page on build.nvidia.com.
-So the plugin uses 40 only when `requests_per_minute` is omitted, and the card
-labels it "Default capacity (unofficial)". Set `requests_per_minute` per auth
-file to the limit your account page shows; the card then reads "Configured
-capacity". The value must be an integer from 1 through 100000. It only affects
-the display; inference is never gated by it.
+So the plugin uses 40 only when `requests_per_minute` is omitted. The card
+itself carries no capacity label — one `Requests per minute` bucket, no
+description, no summary — because the bucket schema has no display name and
+extra text would repeat the bar. Set `requests_per_minute` per auth
+file to the limit your account page shows. The value must be an integer from
+1 through 100000. It only affects the display; inference is never gated by it.
 Native metadata takes precedence over persisted provider storage.
 
 API keys must begin `nvapi-`; leading/trailing whitespace is trimmed and embedded
@@ -141,7 +142,8 @@ tokenizer or a billable NVIDIA operation.
 
 The quota card is **local observation, not an authoritative NVIDIA balance**:
 
-- One bucket, `window: per-minute`, per key; all models on that key share it.
+- One bucket, `window: Requests per minute`, no description and no summary
+  metrics, per key; all models on that key share it.
 - `used` counts executor dispatch attempts in the trailing `(now - 60s, now]`.
   Normal, streaming and raw-HTTP inference each count once before host dispatch.
   Failed upstream requests, retries performed as new executor calls and
@@ -150,10 +152,9 @@ The quota card is **local observation, not an authoritative NVIDIA balance**:
   invalid local payloads, absent host transport, already-cancelled requests and
   token counting do not. Completion/usage notifications cannot double-count
   streams.
-- `capacity` is the auth file's `requests_per_minute`, or the labelled unofficial
-  40 RPM default when it is omitted. Summary metrics
-  expose `requests_used` and `requests_per_minute` because the pinned bucket
-  schema has no numeric capacity/used fields.
+- `capacity` is the auth file's `requests_per_minute`, or the unofficial
+  40 RPM default when it is omitted. Used and capacity counters stay off the
+  card because they would repeat the bar.
 - `remainingFraction = max(0, 1 - used / capacity)`. The used count is not capped:
   a zero card **never blocks or reroutes inference**.
 - `resetTime` is when the oldest still-counted attempt ages out, **not a full
