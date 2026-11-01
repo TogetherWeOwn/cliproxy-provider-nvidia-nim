@@ -60,8 +60,8 @@ cannot observe other keys/processes/clients or silently establish independence.
   public-file checks follow [cliproxy-provider-synthetic](https://github.com/TogetherWeOwn/cliproxy-provider-synthetic/tree/b5eacd4f1375fec10419cdcab6c68709444e7424),
   commit `b5eacd4f1375fec10419cdcab6c68709444e7424`.
 - Shared C-ABI/RPC/auth/passthrough wiring uses the **published**
-  [cliproxy-provider-kit at commit `21069bf`](https://github.com/TogetherWeOwn/cliproxy-provider-kit/tree/21069bfec8f10dac7130d8a1dd82501fec662e4d)
-  (RPC schema 10).
+  [cliproxy-provider-kit at commit `88850ce`](https://github.com/TogetherWeOwn/cliproxy-provider-kit/tree/88850ce995e6eabf88efc1bf60bdd6817f5bee5b)
+  (pseudo-version `v1.1.1-0.20261101115341-88850ce995e6`, RPC schema 10).
   No module replacement or sibling checkout is required.
 - The earlier unreleased NVIDIA dirty diff was consulted only as historical
   design context, not treated as published wire documentation or current quota

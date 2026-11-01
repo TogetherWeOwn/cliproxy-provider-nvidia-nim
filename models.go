@@ -140,8 +140,11 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 	}
 	var wg sync.WaitGroup
 	for i, m := range candidates {
-		// Probes run against the upstream id, inverting the served one.
-		id, ok := upstreamID(m.ID)
+		// Probes run against each candidate's own upstream id. Inverting
+		// the served id would probe two colliding candidates against the
+		// same first-registered upstream id and could hide a usable model
+		// behind a rejected namesake.
+		id, ok := candidateUpstream(m)
 		if !ok {
 			alive[i] = false
 			continue
@@ -174,11 +177,21 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// Colliding upstream ids share one served id, which can be advertised
+	// only once. Keep the first surviving candidate in catalog order and
+	// point dispatch at it, so the advertised id routes to a probed-usable
+	// upstream id rather than to whichever namesake registered first.
 	out := make([]pluginapi.ModelInfo, 0, len(candidates))
+	emitted := make(map[string]bool)
 	for i, m := range candidates {
-		if alive[i] {
-			out = append(out, m)
+		if !alive[i] || emitted[m.ID] {
+			continue
 		}
+		emitted[m.ID] = true
+		if id, ok := candidateUpstream(m); ok {
+			assignMapping(id, m.ID)
+		}
+		out = append(out, m)
 	}
 	return out, nil
 }

@@ -261,6 +261,12 @@ func aggregateSSE(ctx context.Context, chunks <-chan pluginapi.ExecutorStreamChu
 				continue
 			}
 			if c.Err != nil {
+				// A racing cancellation must surface as itself, not as a
+				// retryable 502: the caller distinguishes a dead client
+				// from a broken upstream stream.
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
 				return nil, invalidSSE()
 			}
 			total += len(c.Payload)
