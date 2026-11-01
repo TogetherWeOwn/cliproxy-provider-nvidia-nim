@@ -3,7 +3,7 @@
 First-class NVIDIA API-key auth files, namespaced OpenAI-compatible chat models,
 incremental streaming and **display-only local requests-per-minute quota cards**.
 Uses [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at release `v0.2.1`
+at release `v0.4.1`
 and is tested against the original **CLIProxyAPI v8.0.49 C-ABI host** (ABI 1 /
 RPC schema 10). Requires CLIProxyAPI v8.0.49 or newer: the kit answers schema 10
 and refuses hosts older than schema 10. The plugin declares no multi-auth
@@ -75,7 +75,11 @@ block. Paste it into `bash` or `zsh`; the terminal then prompts for the
 submission runs the same ParseAuth validation and duplicate-key
 guard as an uploaded auth file, so submitting the same key twice is idempotent.
 On a remote host, set `CLIPROXY_BASE` to an `https://` base so the key is
-encrypted in transit. Login without a host base URL still fails.
+encrypted in transit. The login page URL is root-relative, so the panel
+opens it against its own origin on local and remote hosts alike; no host
+base URL is needed. Abandoning a login after submitting a key reserves
+that key only until the login session expires (15 minutes by default);
+after that the same key can be uploaded under another filename.
 
 ## Models and inference
 
