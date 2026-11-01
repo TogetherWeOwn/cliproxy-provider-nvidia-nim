@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
@@ -25,15 +25,16 @@ func requireQuota(t *testing.T, q *quotaProvider, r pluginapi.QuotaFetchRequest,
 		t.Fatalf("quota buckets %+v", out)
 	}
 	b := out.Groups[0].Buckets[0]
-	if b.Window != "per-minute" || b.RemainingFraction != fraction || b.ResetTime != reset {
-		t.Fatalf("quota bucket %+v", b)
+	if out.Groups[0].DisplayName != "Requests per minute (local)" ||
+		b.Window != "per-minute" || b.Description != "" || b.RemainingFraction != fraction || b.ResetTime != reset {
+		t.Fatalf("quota bucket %+v", out.Groups[0])
 	}
-	metrics := map[string]float64{}
-	for _, m := range out.Summary {
-		metrics[m.Key] = m.Value
+	// A configured capacity needs no chips: it is already in the auth file.
+	if len(out.Summary) != 0 {
+		t.Fatalf("configured capacity shows chips %+v", out.Summary)
 	}
-	if metrics["requests_used"] != used || metrics["requests_per_minute"] != capacity {
-		t.Fatalf("quota metrics %+v", out.Summary)
+	if v := kit.CheckCard(out); len(v) != 0 {
+		t.Fatalf("card style violations: %v", v)
 	}
 }
 
@@ -75,12 +76,17 @@ func TestQuotaCapacityDefaultIsLabelledAndOverridable(t *testing.T) {
 	if err != nil || len(out.Groups) != 1 || out.Groups[0].Buckets[0].RemainingFraction != 1-1.0/40 {
 		t.Fatalf("default capacity %+v %v", out, err)
 	}
-	if !strings.Contains(out.Groups[0].Buckets[0].Description, "unofficial 40 RPM") || out.Summary[1].Value != 40 || !strings.Contains(out.Summary[1].Label, "unofficial") {
+	// The unconfigured default is a guess, so it gets one flagging chip and
+	// no sentence; a configured capacity shows no chips at all.
+	if out.Groups[0].Buckets[0].Description != "" || len(out.Summary) != 1 ||
+		out.Summary[0].Key != "requests_per_minute" || out.Summary[0].Value != 40 ||
+		out.Summary[0].Label != "Default capacity (unofficial)" {
 		t.Fatalf("default capacity not labelled as unofficial %+v", out)
 	}
 	configured := quotaRequest("nvapi-example", 4)
 	out, err = q.FetchQuota(context.Background(), configured)
-	if err != nil || out.Groups[0].Buckets[0].RemainingFraction != .75 || strings.Contains(out.Groups[0].Buckets[0].Description, "unofficial") || out.Summary[1].Label != "Configured capacity" {
+	if err != nil || out.Groups[0].Buckets[0].RemainingFraction != .75 ||
+		out.Groups[0].Buckets[0].Description != "" || len(out.Summary) != 0 {
 		t.Fatalf("configured capacity %+v %v", out, err)
 	}
 	for _, r := range []pluginapi.QuotaFetchRequest{

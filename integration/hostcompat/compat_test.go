@@ -262,7 +262,10 @@ func TestRealHostLoader(t *testing.T) {
 		}
 		before := inference.Load()
 		card, handled, err := host.FetchQuota(ctx, pluginapi.QuotaFetchRequest{AuthID: third.ID, Provider: "nvidia-nim", StorageJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-default-key"}`)})
-		if err != nil || !handled || len(card.Groups) != 1 || card.Groups[0].Buckets[0].RemainingFraction != 1 || !strings.Contains(card.Groups[0].Buckets[0].Description, "unofficial 40 RPM") || inference.Load() != before {
+		if err != nil || !handled || len(card.Groups) != 1 || card.Groups[0].DisplayName != "Requests per minute (local)" ||
+			card.Groups[0].Buckets[0].RemainingFraction != 1 || card.Groups[0].Buckets[0].Description != "" ||
+			len(card.Summary) != 1 || card.Summary[0].Key != "requests_per_minute" || card.Summary[0].Value != 40 ||
+			card.Summary[0].Label != "Default capacity (unofficial)" || inference.Load() != before {
 			t.Fatalf("default capacity card %+v %v", card, err)
 		}
 	})
