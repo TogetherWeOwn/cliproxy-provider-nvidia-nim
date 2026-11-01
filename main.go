@@ -8,7 +8,7 @@ import (
 
 const (
 	provider     = "nvidia-nim"
-	version      = "0.1.3"
+	version      = "0.2.0"
 	modelPrefix  = "nvidia/"
 	upstreamBase = "https://integrate.api.nvidia.com"
 )
@@ -22,12 +22,17 @@ func init() {
 func makePlugin(host kit.Caller) (*kit.Runtime, error) {
 	quota := newQuotaProvider()
 	models := newCatalog(quota)
+	auth, err := newAuthProvider()
+	if err != nil {
+		return nil, err
+	}
 	return kit.New(kit.Definition{
 		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-nvidia-nim"},
 		ModelNamespace: modelNamespace,
 		Configure:      configureBase,
 		Capabilities: pluginapi.Capabilities{
-			AuthProvider: newAuthProvider(), ModelRegistrar: models, ModelProvider: models,
+			AuthProvider: auth, ManagementAPI: auth.Login,
+			ModelRegistrar: models, ModelProvider: models,
 			Executor: newExecutor(quota), ExecutorModelScope: pluginapi.ExecutorModelScopeBoth,
 			ExecutorInputFormats: []string{"openai"}, ExecutorOutputFormats: []string{"openai"},
 			QuotaProvider: quota,

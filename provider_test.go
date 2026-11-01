@@ -10,7 +10,10 @@ import (
 )
 
 func TestAuthIdentityDuplicatesAndRPMValidation(t *testing.T) {
-	p := newAuthProvider()
+	p, err := newAuthProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
 	parse := func(file, raw string) (pluginapi.AuthParseResponse, error) {
 		return p.ParseAuth(context.Background(), pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: file, RawJSON: []byte(raw)})
 	}
@@ -52,10 +55,10 @@ func TestAuthIdentityDuplicatesAndRPMValidation(t *testing.T) {
 		t.Fatalf("foreign auth %+v %v", other, err)
 	}
 	if _, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{}); err == nil {
-		t.Fatal("API key login offered")
+		t.Fatal("login without host base URL offered")
 	}
-	if _, err := p.PollLogin(context.Background(), pluginapi.AuthLoginPollRequest{}); err == nil {
-		t.Fatal("API key polling offered")
+	if poll, err := p.PollLogin(context.Background(), pluginapi.AuthLoginPollRequest{State: "unknown"}); err != nil || poll.Status == pluginapi.AuthLoginStatusSuccess {
+		t.Fatalf("unknown state must not succeed: %+v %v", poll, err)
 	}
 	refreshed, err := p.RefreshAuth(context.Background(), pluginapi.AuthRefreshRequest{AuthID: a.Auth.ID, StorageJSON: a.Auth.StorageJSON, Metadata: a.Auth.Metadata})
 	if err != nil || string(refreshed.Auth.StorageJSON) != string(a.Auth.StorageJSON) {
