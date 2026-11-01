@@ -207,7 +207,7 @@ nm -D <output-dir>/nvidia-nim.so | grep cliproxy_plugin_init
 bash scripts/package-release.sh <output-dir>
 ```
 
-Packaging creates `nvidia-nim_0.1.1_linux_amd64.zip` containing `nvidia-nim.so`
+Packaging creates `nvidia-nim_0.1.2_linux_amd64.zip` containing `nvidia-nim.so`
 and `LICENSE`, plus `checksums.txt`. It checks the C-ABI symbol and rejects
 libraries importing GLIBC versions newer than **2.34** or private GLIBC symbols.
 Publish both files together in the matching release; schema-v1 `registry.json`
