@@ -165,7 +165,7 @@ func TestRealHostLoader(t *testing.T) {
 	}
 	quotaReq := pluginapi.QuotaFetchRequest{AuthID: auth.ID, Provider: "nvidia-nim", StorageJSON: saved}
 	quota, handled, err := host.FetchQuota(ctx, quotaReq)
-	if err != nil || !handled || len(quota.Groups) != 1 || quota.Groups[0].Buckets[0].Window != "per-minute" || quota.Groups[0].Buckets[0].RemainingFraction != 1 || inference.Load() != 0 {
+	if err != nil || !handled || len(quota.Groups) != 1 || quota.Groups[0].Buckets[0].Window != "Requests per minute" || quota.Groups[0].Buckets[0].Description != "" || len(quota.Summary) != 0 || quota.Groups[0].Buckets[0].RemainingFraction != 1 || inference.Load() != 0 {
 		t.Fatalf("initial local quota %+v %v", quota, err)
 	}
 	m := executors{}
@@ -262,7 +262,7 @@ func TestRealHostLoader(t *testing.T) {
 		}
 		before := inference.Load()
 		card, handled, err := host.FetchQuota(ctx, pluginapi.QuotaFetchRequest{AuthID: third.ID, Provider: "nvidia-nim", StorageJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-default-key"}`)})
-		if err != nil || !handled || len(card.Groups) != 1 || card.Groups[0].Buckets[0].RemainingFraction != 1 || !strings.Contains(card.Groups[0].Buckets[0].Description, "unofficial 40 RPM") || inference.Load() != before {
+		if err != nil || !handled || len(card.Groups) != 1 || card.Groups[0].Buckets[0].Window != "Requests per minute" || card.Groups[0].Buckets[0].RemainingFraction != 1 || card.Groups[0].Buckets[0].Description != "" || len(card.Summary) != 0 || inference.Load() != before {
 			t.Fatalf("default capacity card %+v %v", card, err)
 		}
 	})
