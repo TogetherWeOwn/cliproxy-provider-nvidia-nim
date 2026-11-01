@@ -24,8 +24,8 @@ type authProvider struct {
 	owners map[[32]byte]string
 }
 
-func newAuthProvider() *authProvider {
-	return &authProvider{APIKeyAuth: kit.APIKeyAuth{Provider: provider, Validate: func(fields map[string]any) error {
+func newAuthProvider() (*authProvider, error) {
+	p := &authProvider{APIKeyAuth: kit.APIKeyAuth{Provider: provider, Validate: func(fields map[string]any) error {
 		if _, exists := fields["id"]; exists {
 			return invalidAuth("auth identity is derived from the API key")
 		}
@@ -36,6 +36,14 @@ func newAuthProvider() *authProvider {
 		_, _, err := rpmCapacity(fields)
 		return err
 	}}, files: make(map[string][32]byte), owners: make(map[[32]byte]string)}
+	// No extra fields: the page prompts for the API key only. Parse is the full
+	// ParseAuth pipeline (nvapi- check, RPM validation, duplicate-key guard).
+	login, err := kit.NewAPIKeyLogin(kit.APIKeyLoginConfig{Provider: provider, Parse: p.ParseAuth})
+	if err != nil {
+		return nil, err
+	}
+	p.APIKeyAuth.Login = login
+	return p, nil
 }
 
 func invalidAuth(message string) *pluginabi.Error {

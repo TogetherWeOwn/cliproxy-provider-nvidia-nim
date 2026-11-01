@@ -61,8 +61,18 @@ do not copy a still-owned key to a second filename.
 
 Optional native fields include `prefix`, `proxy_url`, `weight`, `priority`,
 `label` and `disabled`. Fixed model namespace `nvidia/`; auth `prefix` does
-not replace it. Login/poll are API-key-only errors; refresh preserves storage
+not replace it. Refresh preserves storage
 without calling NVIDIA and does not renew or rotate keys.
+
+## Management-UI login
+
+The management UI's login card serves a kit login page that prompts for the
+`nvapi-` API key, then submits it over an authenticated management POST
+(secrets travel in the POST body only, never in URLs, logs or process
+arguments). The submission runs the same ParseAuth validation and duplicate-key
+guard as an uploaded auth file, so submitting the same key twice is idempotent.
+On a remote host, set `CLIPROXY_BASE` to an `https://` base so the key is
+encrypted in transit. Login without a host base URL still fails.
 
 ## Models and inference
 
