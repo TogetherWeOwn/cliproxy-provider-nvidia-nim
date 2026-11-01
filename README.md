@@ -60,15 +60,16 @@ and re-enable it using native hot configuration reload after moving the file;
 do not copy a still-owned key to a second filename.
 
 Optional native fields include `prefix`, `proxy_url`, `weight`, `priority`,
-`label` and `disabled`. Auth `prefix` does not replace the fixed model namespace.
-Login/poll are API-key-only errors; refresh preserves storage without calling
-NVIDIA and does not renew or rotate keys.
+`label` and `disabled`. Fixed model namespace `nvidia/`; auth `prefix` does
+not replace it. Login/poll are API-key-only errors; refresh preserves storage
+without calling NVIDIA and does not renew or rotate keys.
 
 ## Models and inference
 
 The fixed **`nvidia/`** prefix applies to every static and discovered model.
-Only one leading prefix is stripped before upstream dispatch, including when
-the upstream model itself starts with `nvidia/`.
+Only one leading prefix is stripped before upstream dispatch. An upstream id
+that already starts with `nvidia/` would double the prefix and is refused at
+registration instead of being served bare.
 
 | Client ID | Upstream ID | Static fallback |
 | --- | --- | --- |
