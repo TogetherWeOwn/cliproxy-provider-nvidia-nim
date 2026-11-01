@@ -69,3 +69,17 @@ func TestServeUpstreamIDRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// Regression (Devin Review on TWO-683): a slashless third-party upstream id
+// is ambiguous under the serveID heuristic ("example-tiny" and
+// "nvidia/example-tiny" both serve as "nvidia/example-tiny"), so inversion
+// consults the registration ground truth first and the probe and dispatch
+// send the exact upstream id.
+func TestUpstreamIDPrefersRegisteredMapping(t *testing.T) {
+	if got := serveID("example-tiny"); got != "nvidia/example-tiny" {
+		t.Fatalf("serveID = %q, want %q", got, "nvidia/example-tiny")
+	}
+	if got, ok := upstreamID("nvidia/example-tiny"); !ok || got != "example-tiny" {
+		t.Fatalf("upstreamID = %q, %v; want %q, true", got, ok, "example-tiny")
+	}
+}

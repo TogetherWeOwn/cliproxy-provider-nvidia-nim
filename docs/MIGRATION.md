@@ -79,7 +79,8 @@ versioned install/replacement mechanism and supported hot reload.
 
 1. Confirm parse, persistence, stable key fingerprint and duplicate-file rejection.
 2. Confirm discovery registers fixed-prefixed IDs and strips exactly one leading
-   prefix for upstream, including an NVIDIA-owned model's double namespace.
+   prefix for upstream. NVIDIA-owned ids pass through undoubled (see the table
+   above); a doubled `nvidia/nvidia/…` id is rejected, never served.
 3. Check the card is explicitly local RPM. With capacity configured and after
    a full observation window, verify inference attempts in the trailing 60s,
    unclipped used count, clamped remaining fraction and next-aging-out timestamp.

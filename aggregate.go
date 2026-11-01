@@ -249,6 +249,7 @@ func aggregateSSE(ctx context.Context, chunks <-chan pluginapi.ExecutorStreamChu
 	// carried no chat route): there is no SSE text to scan, no comment to
 	// skip and no [DONE] marker. Channel close is the terminal marker.
 	drained := false
+	total := 0
 	for !drained {
 		select {
 		case <-ctx.Done():
@@ -260,6 +261,10 @@ func aggregateSSE(ctx context.Context, chunks <-chan pluginapi.ExecutorStreamChu
 				continue
 			}
 			if c.Err != nil {
+				return nil, invalidSSE()
+			}
+			total += len(c.Payload)
+			if total > maxAggregateBytes {
 				return nil, invalidSSE()
 			}
 			event := strings.TrimSpace(string(c.Payload))
