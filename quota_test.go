@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
 
@@ -15,7 +15,9 @@ func quotaRequest(key string, capacity int) pluginapi.QuotaFetchRequest {
 	return pluginapi.QuotaFetchRequest{Provider: "nvidia-nim", AuthID: "arbitrary-host-id", StorageJSON: []byte(fmt.Sprintf(`{"api_key":%q,"requests_per_minute":%d}`, key, capacity))}
 }
 
-func requireQuota(t *testing.T, q *quotaProvider, r pluginapi.QuotaFetchRequest, used, capacity, fraction float64, reset string) {
+// The card is one bar with no chips: the used and capacity counters repeat
+// the bar, so they stay out of the emitted shape.
+func requireQuota(t *testing.T, q *quotaProvider, r pluginapi.QuotaFetchRequest, fraction float64, reset string) {
 	t.Helper()
 	out, err := q.FetchQuota(context.Background(), r)
 	if err != nil {
@@ -25,15 +27,14 @@ func requireQuota(t *testing.T, q *quotaProvider, r pluginapi.QuotaFetchRequest,
 		t.Fatalf("quota buckets %+v", out)
 	}
 	b := out.Groups[0].Buckets[0]
-	if b.Window != "per-minute" || b.RemainingFraction != fraction || b.ResetTime != reset {
+	if b.Window != "Requests per minute" || b.Description != "" || b.RemainingFraction != fraction || b.ResetTime != reset {
 		t.Fatalf("quota bucket %+v", b)
 	}
-	metrics := map[string]float64{}
-	for _, m := range out.Summary {
-		metrics[m.Key] = m.Value
+	if len(out.Summary) != 0 {
+		t.Fatalf("quota summary %+v, want no chips", out.Summary)
 	}
-	if metrics["requests_used"] != used || metrics["requests_per_minute"] != capacity {
-		t.Fatalf("quota metrics %+v", out.Summary)
+	if violations := kit.CheckCard(out); len(violations) != 0 {
+		t.Fatalf("CheckCard violations: %v", violations)
 	}
 }
 
@@ -42,20 +43,20 @@ func TestQuotaTrailingWindowBoundaryIsolationAndNoReset(t *testing.T) {
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	q.now = func() time.Time { return now }
 	a := quotaRequest("nvapi-first", 4)
-	requireQuota(t, q, a, 0, 4, 1, "")
+	requireQuota(t, q, a, 1, "")
 	q.record("nvapi-first")
 	now = now.Add(30 * time.Second)
 	q.record("nvapi-first")
 	q.record("nvapi-second")
-	requireQuota(t, q, a, 2, 4, .5, "2030-01-01T00:01:00Z")
+	requireQuota(t, q, a, .5, "2030-01-01T00:01:00Z")
 	// Renaming an auth record does not erase the same key's observed window.
 	a.AuthID = "renamed"
-	requireQuota(t, q, a, 2, 4, .5, "2030-01-01T00:01:00Z")
-	requireQuota(t, q, quotaRequest("nvapi-second", 4), 1, 4, .75, "2030-01-01T00:01:30Z")
+	requireQuota(t, q, a, .5, "2030-01-01T00:01:00Z")
+	requireQuota(t, q, quotaRequest("nvapi-second", 4), .75, "2030-01-01T00:01:30Z")
 	now = now.Add(30 * time.Second)
-	requireQuota(t, q, a, 1, 4, .75, "2030-01-01T00:01:30Z")
+	requireQuota(t, q, a, .75, "2030-01-01T00:01:30Z")
 	now = now.Add(30 * time.Second)
-	requireQuota(t, q, a, 0, 4, 1, "")
+	requireQuota(t, q, a, 1, "")
 	if len(q.recent) != 0 {
 		t.Fatal("expired key histories retained")
 	}
@@ -68,19 +69,19 @@ func TestQuotaTrailingWindowBoundaryIsolationAndNoReset(t *testing.T) {
 	}
 }
 
-func TestQuotaCapacityDefaultIsLabelledAndOverridable(t *testing.T) {
+func TestQuotaCapacityDefaultAndOverride(t *testing.T) {
 	q := newQuotaProvider()
 	q.record("nvapi-example")
 	out, err := q.FetchQuota(context.Background(), pluginapi.QuotaFetchRequest{Provider: "nvidia-nim", StorageJSON: []byte(`{"api_key":"nvapi-example"}`)})
 	if err != nil || len(out.Groups) != 1 || out.Groups[0].Buckets[0].RemainingFraction != 1-1.0/40 {
 		t.Fatalf("default capacity %+v %v", out, err)
 	}
-	if !strings.Contains(out.Groups[0].Buckets[0].Description, "unofficial 40 RPM") || out.Summary[1].Value != 40 || !strings.Contains(out.Summary[1].Label, "unofficial") {
-		t.Fatalf("default capacity not labelled as unofficial %+v", out)
+	if out.Groups[0].Buckets[0].Description != "" || len(out.Summary) != 0 {
+		t.Fatalf("card carries extra text or chips %+v", out)
 	}
 	configured := quotaRequest("nvapi-example", 4)
 	out, err = q.FetchQuota(context.Background(), configured)
-	if err != nil || out.Groups[0].Buckets[0].RemainingFraction != .75 || strings.Contains(out.Groups[0].Buckets[0].Description, "unofficial") || out.Summary[1].Label != "Configured capacity" {
+	if err != nil || out.Groups[0].Buckets[0].RemainingFraction != .75 {
 		t.Fatalf("configured capacity %+v %v", out, err)
 	}
 	for _, r := range []pluginapi.QuotaFetchRequest{
@@ -116,5 +117,5 @@ func TestQuotaConcurrentCountsDoNotGateOrUnderflow(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	requireQuota(t, q, quotaRequest("nvapi-example", 4), 100, 4, 0, "2030-01-01T00:01:00Z")
+	requireQuota(t, q, quotaRequest("nvapi-example", 4), 0, "2030-01-01T00:01:00Z")
 }
