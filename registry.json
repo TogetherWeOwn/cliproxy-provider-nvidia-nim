@@ -7,7 +7,7 @@
       "description": "NVIDIA API-key auth, namespaced OpenAI chat models and display-only local RPM quota cards",
       "author": "TogetherWeOwn",
       "repository": "https://github.com/TogetherWeOwn/cliproxy-provider-nvidia-nim",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "license": "MIT",
       "tags": ["provider", "nvidia", "nim", "quota"],
       "install": {"type": "github-release"}

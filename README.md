@@ -20,9 +20,12 @@ See [migration](docs/MIGRATION.md) and the pinned-host caveat below before cutov
 
 ## Auth files
 
-Create one private JSON auth file per legitimate API key in the host's auth
-directory, mode `0600`. The following is illustrative JSON; replace both
-placeholders locally. `requests_per_minute` is optional (see below).
+The provider is API-key only: there is no login card in the management UI.
+Upload one private JSON auth file per legitimate API key through the
+management UI's auth-file upload (the same path built-in API-key providers
+use), or place the file directly in the host's auth directory, mode `0600`.
+The following is illustrative JSON; replace both placeholders locally.
+`requests_per_minute` is optional (see below).
 Never commit credential files or real account labels.
 
 ```json
@@ -51,35 +54,21 @@ file to the limit your account page shows. The value must be an integer from
 1 through 100000. It only affects the display; inference is never gated by it.
 Native metadata takes precedence over persisted provider storage.
 
-API keys must begin `nvapi-`; leading/trailing whitespace is trimmed and embedded
-whitespace/control characters are rejected. This only validates shape, not
-entitlement. Auth IDs are `nvidia-nim:` followed by the first 12 SHA-256 hex digits
-of the key. User-supplied `id` is rejected. The same key in two files is rejected;
-reparsing one filename is safe, and changing its key releases the old ownership.
-Filename ownership is in-memory. To rename/delete auth files, disable the plugin
-and re-enable it using native hot configuration reload after moving the file;
-do not copy a still-owned key to a second filename.
+API keys must begin `nvapi-`; leading/trailing whitespace is trimmed. This only
+describes shape, not entitlement. The auth ID is the file's relative path under
+the auth directory; a user-supplied `id` field is stored but ignored. Every
+file loads as its own auth, so use one file per key — the same key in two
+files loads twice instead of being rejected. Renaming, editing or deleting a
+file takes effect when the host rescans the auth directory; no plugin restart
+is needed. Uploaded files are not validated against the shape above at upload
+time (a non-`nvapi-` key or an out-of-range `requests_per_minute` loads, then
+fails at request time); the unit-tested ParseAuth in `auth.go` documents the
+intended shape.
 
 Optional native fields include `prefix`, `proxy_url`, `weight`, `priority`,
 `label` and `disabled`. Fixed model namespace `nvidia/`; auth `prefix` does
 not replace it. Refresh preserves storage
 without calling NVIDIA and does not renew or rotate keys.
-
-## Management-UI login
-
-The management UI's login card serves a kit login page that displays a shell
-block. Paste it into `bash` or `zsh`; the terminal then prompts for the
-`nvapi-` API key, then submits it over an authenticated management POST
-(the API key travels in the POST body and the management key in the
-`Authorization` header, never in URLs, logs or process arguments). The
-submission runs the same ParseAuth validation and duplicate-key
-guard as an uploaded auth file, so submitting the same key twice is idempotent.
-On a remote host, set `CLIPROXY_BASE` to an `https://` base so the key is
-encrypted in transit. The login page URL is root-relative, so the panel
-opens it against its own origin on local and remote hosts alike; no host
-base URL is needed. Abandoning a login after submitting a key reserves
-that key only until the login session expires (15 minutes by default);
-after that the same key can be uploaded under another filename.
 
 ## Models and inference
 
@@ -231,7 +220,7 @@ nm -D <output-dir>/nvidia-nim.so | grep cliproxy_plugin_init
 bash scripts/package-release.sh <output-dir>
 ```
 
-Packaging creates `nvidia-nim_0.2.3_linux_amd64.zip` containing `nvidia-nim.so`
+Packaging creates `nvidia-nim_0.2.4_linux_amd64.zip` containing `nvidia-nim.so`
 and `LICENSE`, plus `checksums.txt`. It checks the C-ABI symbol and rejects
 libraries importing GLIBC versions newer than **2.34** or private GLIBC symbols.
 Publish both files together in the matching release; schema-v1 `registry.json`
