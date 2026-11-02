@@ -8,6 +8,7 @@ import (
 
 const (
 	provider     = "nvidia-nim"
+	displayName  = "NVIDIA NIM"
 	version      = "0.2.3"
 	modelPrefix  = "nvidia/"
 	upstreamBase = "https://integrate.api.nvidia.com"
@@ -27,7 +28,7 @@ func makePlugin(host kit.Caller) (*kit.Runtime, error) {
 		return nil, err
 	}
 	return kit.New(kit.Definition{
-		Metadata:       pluginapi.Metadata{Name: provider, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-nvidia-nim", Logo: "https://www.google.com/s2/favicons?domain=nvidia.com"},
+		Metadata:       pluginapi.Metadata{Name: displayName, Version: version, Author: "TogetherWeOwn", GitHubRepository: "https://github.com/TogetherWeOwn/cliproxy-provider-nvidia-nim", Logo: "https://www.google.com/s2/favicons?domain=nvidia.com"},
 		ModelNamespace: modelNamespace,
 		Configure:      configureBase,
 		Capabilities: pluginapi.Capabilities{
