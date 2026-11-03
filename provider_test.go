@@ -10,10 +10,7 @@ import (
 )
 
 func TestAuthIdentityDuplicatesAndRPMValidation(t *testing.T) {
-	p, err := newAuthProvider()
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := newAuthProvider()
 	parse := func(file, raw string) (pluginapi.AuthParseResponse, error) {
 		return p.ParseAuth(context.Background(), pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: file, RawJSON: []byte(raw)})
 	}
@@ -54,11 +51,14 @@ func TestAuthIdentityDuplicatesAndRPMValidation(t *testing.T) {
 	if err != nil || other.Handled {
 		t.Fatalf("foreign auth %+v %v", other, err)
 	}
+	// API-key only: no login page is registered, so both calls fail with
+	// api_key_only. Auth files load through the host's generic file path;
+	// the hostcompat test proves that path end to end.
 	if _, err := p.StartLogin(context.Background(), pluginapi.AuthLoginStartRequest{}); err == nil {
-		t.Fatal("login without host base URL offered")
+		t.Fatal("login started for an API-key-only provider")
 	}
-	if poll, err := p.PollLogin(context.Background(), pluginapi.AuthLoginPollRequest{State: "unknown"}); err != nil || poll.Status == pluginapi.AuthLoginStatusSuccess {
-		t.Fatalf("unknown state must not succeed: %+v %v", poll, err)
+	if poll, err := p.PollLogin(context.Background(), pluginapi.AuthLoginPollRequest{State: "unknown"}); err == nil && poll.Status == pluginapi.AuthLoginStatusSuccess {
+		t.Fatalf("unknown state succeeded: %+v", poll)
 	}
 	refreshed, err := p.RefreshAuth(context.Background(), pluginapi.AuthRefreshRequest{AuthID: a.Auth.ID, StorageJSON: a.Auth.StorageJSON, Metadata: a.Auth.Metadata})
 	if err != nil || string(refreshed.Auth.StorageJSON) != string(a.Auth.StorageJSON) {

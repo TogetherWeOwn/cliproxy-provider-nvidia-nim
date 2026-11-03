@@ -137,21 +137,34 @@ func TestRealHostLoader(t *testing.T) {
 	defer cancel()
 	ctx = logging.WithResponseHeadersHolder(ctx)
 	host.ApplyConfig(ctx, cfg)
-	if !host.PluginLoaded("nvidia-nim") || !host.PluginRegistered("nvidia-nim") || !host.HasAuthProvider("nvidia-nim") || !host.HasQuotaProvider("nvidia-nim") {
+	// API-key only: the plugin registers no AuthProvider, so the
+	// management UI shows no login card.
+	if !host.PluginLoaded("nvidia-nim") || !host.PluginRegistered("nvidia-nim") || host.HasAuthProvider("nvidia-nim") || !host.HasQuotaProvider("nvidia-nim") {
 		t.Fatalf("registration %+v", host.RegisteredPlugins())
 	}
 	info := host.RegisteredPlugins()
-	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.2.3" {
+	if len(info) != 1 || !info[0].SupportsQuota || info[0].Metadata.Version != "0.2.4" {
 		t.Fatalf("metadata %+v", info)
 	}
+	// Without an AuthProvider the host leaves the parse unhandled and the auth
+	// file loads through the generic file path instead.
 	auth, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: "example.json", RawJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-example-key","requests_per_minute":4,"label":"Example"}`)})
-	if err != nil || !handled || auth == nil {
-		t.Fatalf("auth %v %v", handled, err)
+	if err != nil || handled || auth != nil {
+		t.Fatalf("plugin auth unexpectedly handled %v %v", handled, err)
 	}
-	if _, _, err = host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: "duplicate.json", RawJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-example-key"}`)}); err == nil {
-		t.Fatal("duplicate accepted")
+	fileRaw := []byte(`{"type":"nvidia-nim","api_key":"nvapi-example-key","requests_per_minute":4,"label":"Example"}`)
+	var metadata map[string]any
+	if json.Unmarshal(fileRaw, &metadata) != nil {
+		t.Fatal("invalid fixture JSON")
 	}
 	file := filepath.Join(cfg.AuthDir, "example.json")
+	if err = os.WriteFile(file, fileRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	auth = host.AuthDataToCoreAuth(pluginapi.AuthData{Provider: "nvidia-nim", FileName: "example.json", Label: "Example", StorageJSON: fileRaw, Metadata: metadata}, file, "example.json")
+	if auth == nil {
+		t.Fatal("generic file auth did not convert")
+	}
 	if err = auth.Storage.SaveTokenToFile(file); err != nil {
 		t.Fatal(err)
 	}
@@ -256,9 +269,14 @@ func TestRealHostLoader(t *testing.T) {
 		}
 	}
 	t.Run("unconfigured capacity uses the labelled unofficial default", func(t *testing.T) {
-		third, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: "default.json", RawJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-default-key"}`)})
-		if err != nil || !handled || third == nil {
-			t.Fatalf("default auth %v", err)
+		thirdRaw := []byte(`{"type":"nvidia-nim","api_key":"nvapi-default-key"}`)
+		var thirdMeta map[string]any
+		if json.Unmarshal(thirdRaw, &thirdMeta) != nil {
+			t.Fatal("invalid fixture JSON")
+		}
+		third := host.AuthDataToCoreAuth(pluginapi.AuthData{Provider: "nvidia-nim", FileName: "default.json", StorageJSON: thirdRaw, Metadata: thirdMeta}, filepath.Join(cfg.AuthDir, "default.json"), "default.json")
+		if third == nil {
+			t.Fatal("generic default auth did not convert")
 		}
 		before := inference.Load()
 		card, handled, err := host.FetchQuota(ctx, pluginapi.QuotaFetchRequest{AuthID: third.ID, Provider: "nvidia-nim", StorageJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-default-key"}`)})
@@ -267,9 +285,14 @@ func TestRealHostLoader(t *testing.T) {
 		}
 	})
 	t.Run("native round-robin and per-auth rate cooldown", func(t *testing.T) {
-		second, handled, err := host.ParseAuth(ctx, pluginapi.AuthParseRequest{Provider: "nvidia-nim", FileName: "second.json", RawJSON: []byte(`{"type":"nvidia-nim","api_key":"nvapi-second-key","requests_per_minute":4}`)})
-		if err != nil || !handled || second == nil {
-			t.Fatalf("second auth %v", err)
+		secondRaw := []byte(`{"type":"nvidia-nim","api_key":"nvapi-second-key","requests_per_minute":4}`)
+		var secondMeta map[string]any
+		if json.Unmarshal(secondRaw, &secondMeta) != nil {
+			t.Fatal("invalid fixture JSON")
+		}
+		second := host.AuthDataToCoreAuth(pluginapi.AuthData{Provider: "nvidia-nim", FileName: "second.json", StorageJSON: secondRaw, Metadata: secondMeta}, filepath.Join(cfg.AuthDir, "second.json"), "second.json")
+		if second == nil {
+			t.Fatal("generic second auth did not convert")
 		}
 		mgr := coreauth.NewManager(nil, &coreauth.RoundRobinSelector{}, nil)
 		mgr.SetRetryConfig(0, 0, 2)
@@ -320,7 +343,7 @@ func TestRegistryUsesNativeStoreSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg, err := pluginstore.ParseRegistry(raw)
-	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.2.3" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
+	if err != nil || reg.SchemaVersion != 1 || len(reg.Plugins) != 1 || reg.Plugins[0].ID != "nvidia-nim" || reg.Plugins[0].Version != "0.2.4" || pluginstore.PluginInstallType(reg.Plugins[0]) != "github-release" {
 		t.Fatalf("registry %+v %v", reg, err)
 	}
 }
