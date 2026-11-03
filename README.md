@@ -32,7 +32,6 @@ Never commit credential files or real account labels.
 {
   "type": "nvidia-nim",
   "api_key": "nvapi-<api-key>",
-  "label": "<account-label>",
   "requests_per_minute": 40,
   "weight": 1,
   "priority": 0,
@@ -61,12 +60,14 @@ file loads as its own auth, so use one file per key — the same key in two
 files loads twice instead of being rejected. Renaming, editing or deleting a
 file takes effect when the host rescans the auth directory; no plugin restart
 is needed. Uploaded files are not validated against the shape above at upload
-time (a non-`nvapi-` key or an out-of-range `requests_per_minute` loads, then
-fails at request time); the unit-tested ParseAuth in `auth.go` documents the
-intended shape.
+time (a non-`nvapi-` key loads, then fails at request time; an out-of-range
+`requests_per_minute` loads, then fails the quota fetch at request time while
+inference keeps serving, since inference is never gated by it); the
+unit-tested ParseAuth in `auth.go` documents the intended shape.
 
-Optional native fields include `prefix`, `proxy_url`, `weight`, `priority`,
-`label` and `disabled`. Fixed model namespace `nvidia/`; auth `prefix` does
+Optional native fields include `prefix`, `proxy_url`, `weight`, `priority`
+and `disabled`. The management UI derives the display label from the file
+itself; a file-level `label` is ignored on the generic file path. Fixed model namespace `nvidia/`; auth `prefix` does
 not replace it. Refresh preserves storage
 without calling NVIDIA and does not renew or rotate keys.
 
