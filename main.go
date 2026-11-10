@@ -9,7 +9,7 @@ import (
 const (
 	provider     = "nvidia-nim"
 	displayName  = "NVIDIA NIM"
-	version      = "0.2.4"
+	version      = "0.2.5"
 	modelPrefix  = "nvidia/"
 	upstreamBase = "https://integrate.api.nvidia.com"
 )
