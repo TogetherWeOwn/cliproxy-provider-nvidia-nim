@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"hash/maphash"
 	"net/http"
 	"strings"
@@ -199,8 +200,12 @@ func fetchCatalog(ctx context.Context, client pluginapi.HostHTTPClient, key stri
 
 // validateModels is the kit Validate hook: it probes every candidate against
 // its own upstream id and drops only the definitively rejected ones, in
-// catalog order. A cancelled/expired validation context returns an error so
-// the kit falls back; unproven candidates are kept, never dropped.
+// catalog order. Unproven candidates are kept, never dropped — including
+// when the validation budget or kit fetch deadline expires first (timeout
+// is an unknown outcome, like 429/5xx). An explicit caller cancellation
+// returns an error instead so the kit falls back; a catalog whose every
+// candidate was definitively rejected is the same kind of failure, never an
+// empty catalog to cache as last-good.
 func (c catalog) validateModels(ctx context.Context, req pluginapi.AuthModelRequest, models []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
 	key, err := authKey(req.StorageJSON, req.Metadata)
 	if err != nil {
@@ -249,7 +254,7 @@ func (c catalog) validateModels(ctx context.Context, req pluginapi.AuthModelRequ
 		}()
 	}
 	wg.Wait()
-	if err := ctx.Err(); err != nil {
+	if err := ctx.Err(); errors.Is(err, context.Canceled) {
 		return nil, err
 	}
 	// Colliding upstream ids share one served id, which can be advertised
@@ -272,6 +277,9 @@ func (c catalog) validateModels(ctx context.Context, req pluginapi.AuthModelRequ
 		emitted[served] = true
 		assignMapping(m.ID, served)
 		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return nil, rpcError("models_fetch_failed", "model discovery returned no usable models", 502)
 	}
 	return out, nil
 }

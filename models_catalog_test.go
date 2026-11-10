@@ -31,6 +31,8 @@ type fixtureUpstream struct {
 	defaultMode fixtureReply
 	byKey       map[string]fixtureReply
 	blockModels bool
+	blockProbes bool
+	rejectProbe map[string]int // probe model id → status (default 200)
 }
 
 func (f *fixtureUpstream) set(status int, body string) {
@@ -50,6 +52,22 @@ func (f *fixtureUpstream) setKey(key string, reply fixtureReply) {
 
 func (f *fixtureUpstream) handler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/chat/completions" { // validation probe: usable
+		var body map[string]any
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+		model, _ := body["model"].(string)
+		f.mu.Lock()
+		status := f.rejectProbe[model]
+		block := f.blockProbes
+		f.mu.Unlock()
+		if block {
+			<-r.Context().Done()
+			return
+		}
+		if status != 0 {
+			w.WriteHeader(status)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, "data: [DONE]\n\n")
 		return
@@ -292,9 +310,36 @@ func TestCatalogFixtureCredentialGenerationIsolation(t *testing.T) {
 	}
 }
 
-// Cancellation and enforceable limits: a pre-cancelled context errors; a
-// mid-flight cancellation, an oversize body and a blocking upstream all fall
-// back to the static list within the caller's deadline.
+// A catalog whose every candidate is definitively rejected is a failed
+// fetch: the static list serves, the empty result is never cached as
+// last-good, and a later healthy catalog still converges.
+func TestCatalogFixtureAllRejectedUsesStatic(t *testing.T) {
+	up := &fixtureUpstream{}
+	up.set(200, catalogBody("old/retired", "paid/forbidden"))
+	up.rejectProbe = map[string]int{"old/retired": 410, "paid/forbidden": 403}
+	server := fixtureServer(t, up)
+	c := fixtureCatalog(nil, 0)
+	req := fixtureRequest(server, "nvapi-example")
+
+	if got := ids(fixtureServe(t, c, req)); got != "nvidia/stepfun-ai/step-5-preview" {
+		t.Fatalf("all-rejected served %q, want the static fallback", got)
+	}
+	// A subsequent fetch failure must still serve static: nothing usable was
+	// ever cached as last-good.
+	up.set(503, `{}`)
+	if got := ids(fixtureServe(t, c, req)); got != "nvidia/stepfun-ai/step-5-preview" {
+		t.Fatalf("after failure %q, want the static fallback", got)
+	}
+	up.set(200, catalogBody("a/model"))
+	if got := ids(fixtureServe(t, c, req)); got != "nvidia/a/model" {
+		t.Fatalf("after recovery %q, want the fresh catalog", got)
+	}
+}
+
+// Cancellation and enforceable limits: a pre-cancelled context errors; an
+// explicit mid-flight cancellation and an oversize body fall back to the
+// static list; a deadline keeps the unrejected candidates. Every case
+// returns within its deadline.
 func TestCatalogFixtureCancellationAndDeadline(t *testing.T) {
 	t.Run("pre-cancelled errors", func(t *testing.T) {
 		up := &fixtureUpstream{}
@@ -310,8 +355,11 @@ func TestCatalogFixtureCancellationAndDeadline(t *testing.T) {
 	t.Run("mid-flight cancellation falls back", func(t *testing.T) {
 		up := &fixtureUpstream{blockModels: true}
 		server := fixtureServer(t, up)
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		defer cancel()
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			cancel()
+		}()
 		start := time.Now()
 		out, err := fixtureCatalog(nil, 0).ModelsForAuth(ctx, fixtureRequest(server, "nvapi-example"))
 		if err != nil {
@@ -322,6 +370,25 @@ func TestCatalogFixtureCancellationAndDeadline(t *testing.T) {
 		}
 		if elapsed := time.Since(start); elapsed > 5*time.Second {
 			t.Fatalf("cancellation took %s; the deadline must be enforceable", elapsed)
+		}
+	})
+
+	t.Run("deadline keeps unrejected candidates", func(t *testing.T) {
+		up := &fixtureUpstream{blockProbes: true}
+		up.set(200, catalogBody("a/model"))
+		server := fixtureServer(t, up)
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		out, err := fixtureCatalog(nil, 0).ModelsForAuth(ctx, fixtureRequest(server, "nvapi-example"))
+		if err != nil {
+			t.Fatal("deadline must keep unrejected candidates, not error:", err)
+		}
+		if ids(out.Models) != "nvidia/a/model" {
+			t.Fatalf("deadline served %q, want the unrejected candidate", ids(out.Models))
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Fatalf("deadline took %s; the budget must be enforceable", elapsed)
 		}
 	})
 

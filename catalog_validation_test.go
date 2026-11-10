@@ -128,8 +128,10 @@ func TestVerdictCacheExpires(t *testing.T) {
 }
 
 // Kit cancellation semantics: a context cancelled before the call errors;
-// a context cancelled mid-validation falls back to the static list without
-// error (the fetch that already succeeded is not propagated as a hangup).
+// an explicit mid-validation cancellation falls back to the static list
+// without error; a deadline (caller timeout or the kit's fetch deadline)
+// keeps the not-yet-rejected candidates — a timeout is an unknown outcome,
+// not a rejection — and the call still returns bounded.
 func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
@@ -148,14 +150,31 @@ func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
 		t.Fatal("pre-cancelled discovery returned a catalog")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	out, err := newCatalog(nil).ModelsForAuth(ctx, req)
+	mid, cancelMid := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancelMid()
+	}()
+	out, err := newCatalog(nil).ModelsForAuth(mid, req)
 	if err != nil {
 		t.Fatal("mid-validation cancellation must fall back, not error:", err)
 	}
 	if got := ids(out.Models); got != "nvidia/stepfun-ai/step-5-preview" {
 		t.Fatalf("cancelled discovery served %q, want the static fallback", got)
+	}
+
+	deadline, cancelDeadline := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancelDeadline()
+	start := time.Now()
+	out, err = newCatalog(nil).ModelsForAuth(deadline, req)
+	if err != nil {
+		t.Fatal("validation deadline must keep unrejected candidates, not error:", err)
+	}
+	if got := ids(out.Models); got != "nvidia/slow/a,nvidia/slow/b" {
+		t.Fatalf("deadline discovery served %q, want the unrejected candidates", got)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("deadline took %s; the budget must be enforceable", elapsed)
 	}
 }
 

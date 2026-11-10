@@ -117,9 +117,12 @@ model above, served as configured (trusted, not probe-validated) whenever
 there is no usable fresh or last-good list. Every `ModelsForAuth` call
 attempts one fresh fetch; any fetch or validation failure — transport/server
 errors, missing catalog, malformed or oversized (>1 MiB) JSON, an empty or
-all-rejected list, 401/402/403/429, a cancelled validation context, or an
-absent host client — falls back to that credential's last-good list and then
-to the static list **without error**. Only an already-cancelled context or a
+all-rejected list, 401/402/403/429, an explicit validation cancellation, or
+an absent host client — falls back to that credential's last-good list and
+then to the static list **without error**. A deadline (the kit's fetch
+deadline or a caller's timeout) instead keeps the candidates not
+definitively rejected, like any other inconclusive outcome, and an empty
+result is never cached as last-good. Only an already-cancelled context or a
 failure with nothing to fall back to surfaces an error, so
 credential/rate failures may be masked by a healthy-looking catalog here; the
 executor still classifies each dispatched request. The kit performs a single
