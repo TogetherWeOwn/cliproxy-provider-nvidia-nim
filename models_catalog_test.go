@@ -358,7 +358,9 @@ func TestCatalogFixtureCancellationAndDeadline(t *testing.T) {
 	})
 
 	t.Run("mid-flight cancellation falls back", func(t *testing.T) {
-		started := make(chan struct{})
+		// Buffered: the handler's non-blocking signal must never be dropped
+		// before the cancelling goroutine starts waiting.
+		started := make(chan struct{}, 1)
 		up := &fixtureUpstream{blockModels: true, modelsStarted: started}
 		server := fixtureServer(t, up)
 		ctx, cancel := context.WithCancel(context.Background())

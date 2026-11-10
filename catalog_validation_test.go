@@ -134,8 +134,9 @@ func TestVerdictCacheExpires(t *testing.T) {
 // not a rejection — and the call still returns bounded.
 func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
 	// probeStarted is signalled by the first probe so cancellation cannot
-	// land before validation begins.
-	probeStarted := make(chan struct{})
+	// land before validation begins. Buffered: the handler's non-blocking
+	// signal must never be dropped before the cancelling goroutine waits.
+	probeStarted := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
 			io.WriteString(w, `{"data":[{"id":"slow/a"},{"id":"slow/b"}]}`)
