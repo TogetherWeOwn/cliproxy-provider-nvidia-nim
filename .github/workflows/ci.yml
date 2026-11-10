@@ -38,22 +38,26 @@ jobs:
           go build -trimpath -buildmode=c-shared -o "$TMPDIR/nvidia-nim.so" .
           nm -D "$TMPDIR/nvidia-nim.so" > "$TMPDIR/symbols.txt"
           grep -q ' T cliproxy_plugin_init$' "$TMPDIR/symbols.txt"
-      - name: Retain release package and checksums
-        run: |
-          mkdir -p "$TMPDIR/release"
-          bash scripts/package-release.sh "$TMPDIR/release"
-          ls -l "$TMPDIR/release"
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: nvidia-nim-release-${{ github.sha }}
-          path: ${{ env.TMPDIR }}/release/*
-          retention-days: 90
       - name: Secret scan
         run: |
           go install github.com/zricethezav/gitleaks/v8@v8.24.3
           gitleaks dir --redact --no-banner .
           python3 -I scripts/check-public-files.py .
+      # Provenance-bearing package only on push: github.sha is the pushed
+      # commit there. PR runs keep merge-tree verification only.
+      - name: Retain release package and checksums
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p "$TMPDIR/release"
+          bash scripts/package-release.sh "$TMPDIR/release"
+          ls -l "$TMPDIR/release"
+      - name: Upload release artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-nim-release-${{ github.sha }}
+          path: ${{ env.TMPDIR }}/release/*
+          retention-days: 90
       - name: Remove scratch directory
         if: always()
         run: |
