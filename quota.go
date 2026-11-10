@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"sync"
 	"time"
@@ -16,14 +18,41 @@ import (
 // commit ad3cb9ecd0130b1b7a0ffb122d0d4685bd8e659b. Unlike that scheduler, this
 // provider only observes dispatched inference attempts and NEVER admits, blocks,
 // reserves, selects or cools down an auth based on this local count.
+//
+// Bucket identity is an HMAC-SHA256 of the credential under a per-process
+// random key (generated once at construction, never persisted). A plain
+// SHA-256 of the key would be a weak unsalted hash of a secret (CodeQL
+// go/weak-sensitive-data-hashing); the keyed HMAC preserves per-key
+// isolation without exposing a brute-forceable digest. On entropy failure
+// the provider is fail-closed (macValid false): record is a no-op and
+// FetchQuota errors, never falling back to a zero key or a plain hash.
 type quotaProvider struct {
-	mu     sync.Mutex
-	recent map[[32]byte][]time.Time
-	now    func() time.Time
+	mu       sync.Mutex
+	recent   map[[32]byte][]time.Time
+	now      func() time.Time
+	macKey   [32]byte
+	macValid bool
 }
 
 func newQuotaProvider() *quotaProvider {
-	return &quotaProvider{recent: make(map[[32]byte][]time.Time), now: time.Now}
+	q := &quotaProvider{recent: make(map[[32]byte][]time.Time), now: time.Now}
+	if _, err := rand.Read(q.macKey[:]); err == nil {
+		q.macValid = true
+	}
+	return q
+}
+
+// bucket derives the process-local bucket for a credential. The macKey is
+// immutable after construction, so this is safe without holding mu.
+func (q *quotaProvider) bucket(key string) ([32]byte, bool) {
+	if q == nil || !q.macValid {
+		return [32]byte{}, false
+	}
+	h := hmac.New(sha256.New, q.macKey[:])
+	h.Write([]byte(key))
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out, true
 }
 func (*quotaProvider) Identifier() string { return provider }
 func (*quotaProvider) DescribeQuota(context.Context, pluginapi.QuotaDescribeRequest) (pluginapi.QuotaDescribeResponse, error) {
@@ -48,10 +77,13 @@ func (q *quotaProvider) prune(now time.Time) {
 	}
 }
 func (q *quotaProvider) record(key string) {
-	if q == nil {
+	if key == "" {
 		return
 	}
-	digest := sha256.Sum256([]byte(key))
+	digest, ok := q.bucket(key)
+	if !ok {
+		return
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	now := q.now()
@@ -77,10 +109,14 @@ func (q *quotaProvider) FetchQuota(ctx context.Context, r pluginapi.QuotaFetchRe
 	if err != nil {
 		return pluginapi.QuotaFetchResponse{}, err
 	}
+	digest, ok := q.bucket(key)
+	if !ok {
+		return pluginapi.QuotaFetchResponse{}, &pluginabi.Error{Code: "quota_unavailable", Message: "quota state is unavailable", HTTPStatus: 503}
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.prune(q.now())
-	history := q.recent[sha256.Sum256([]byte(key))]
+	history := q.recent[digest]
 	used := len(history)
 	fraction := max(0, 1-float64(used)/float64(capacity))
 	bucket := pluginapi.QuotaBucket{Window: "Requests per minute", RemainingFraction: fraction}
