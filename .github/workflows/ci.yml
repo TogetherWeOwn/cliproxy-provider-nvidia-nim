@@ -38,6 +38,17 @@ jobs:
           go build -trimpath -buildmode=c-shared -o "$TMPDIR/nvidia-nim.so" .
           nm -D "$TMPDIR/nvidia-nim.so" > "$TMPDIR/symbols.txt"
           grep -q ' T cliproxy_plugin_init$' "$TMPDIR/symbols.txt"
+      - name: Retain release package and checksums
+        run: |
+          mkdir -p "$TMPDIR/release"
+          bash scripts/package-release.sh "$TMPDIR/release"
+          ls -l "$TMPDIR/release"
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-nim-release-${{ github.sha }}
+          path: ${{ env.TMPDIR }}/release/*
+          retention-days: 90
       - name: Secret scan
         run: |
           go install github.com/zricethezav/gitleaks/v8@v8.24.3

@@ -31,5 +31,6 @@ archive="nvidia-nim_${version}_linux_amd64.zip"
 # Generated C headers, tests and credentials never enter the archive.
 zip -q -X -j "$scratch/$archive" "$scratch/nvidia-nim.so" "$root/LICENSE"
 (cd -- "$scratch" && sha256sum "$archive") > "$scratch/checksums.txt"
-cp -- "$scratch/$archive" "$scratch/checksums.txt" "$output/"
-printf 'Created %s and checksums.txt\n' "$archive"
+(cd -- "$scratch" && sha256sum "nvidia-nim.so") > "$scratch/library.sha256"
+cp -- "$scratch/$archive" "$scratch/checksums.txt" "$scratch/library.sha256" "$output/"
+printf 'Created %s, checksums.txt and library.sha256\n' "$archive"
