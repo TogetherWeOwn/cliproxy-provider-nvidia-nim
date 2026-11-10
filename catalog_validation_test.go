@@ -127,6 +127,9 @@ func TestVerdictCacheExpires(t *testing.T) {
 	}
 }
 
+// Kit cancellation semantics: a context cancelled before the call errors;
+// a context cancelled mid-validation falls back to the static list without
+// error (the fetch that already succeeded is not propagated as a hangup).
 func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
@@ -137,11 +140,22 @@ func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer server.Close()
+	req := pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}}
+
+	pre, cancelPre := context.WithCancel(context.Background())
+	cancelPre()
+	if _, err := newCatalog(nil).ModelsForAuth(pre, req); err == nil {
+		t.Fatal("pre-cancelled discovery returned a catalog")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_, err := newCatalog(nil).ModelsForAuth(ctx, pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
-	if err == nil {
-		t.Fatal("cancelled discovery returned a catalog")
+	out, err := newCatalog(nil).ModelsForAuth(ctx, req)
+	if err != nil {
+		t.Fatal("mid-validation cancellation must fall back, not error:", err)
+	}
+	if got := ids(out.Models); got != "nvidia/stepfun-ai/step-5-preview" {
+		t.Fatalf("cancelled discovery served %q, want the static fallback", got)
 	}
 }
 

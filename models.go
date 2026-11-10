@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	kit "github.com/TogetherWeOwn/cliproxy-provider-kit"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -16,10 +17,18 @@ import (
 // The hosted /v1/models list is a static catalog, not per-account availability:
 // on 2026-10-31 it listed 85 IDs for one key, and a one-token chat probe of each
 // returned 404 "function ... not found" for 60 of them; retired IDs answer 410.
-// ModelsForAuth therefore validates every candidate with the chat endpoint the
+// Model discovery therefore validates every candidate with the chat endpoint the
 // executor uses and advertises only models the gateway does not definitively
 // reject. Unknown outcomes (timeouts, 429, 5xx, transport errors) keep the model
 // so a transient upstream problem never empties the catalog.
+//
+// Model serving goes through kit ModelCatalog (v0.5.0): every ModelsForAuth
+// call attempts one fresh fetch, any failure falls back to that auth's durable
+// last-good list and then to the static list, and only an already-cancelled
+// context (or a failure with nothing to fall back to) surfaces an error. The
+// kit performs a single fetch per call — it includes no bounded retry, so a
+// failure followed by recovery is observed only when a later call fetches a
+// healthy catalog again; Timeline-B recovery is never guaranteed.
 const (
 	probeConcurrency = 8
 	probeTimeout     = 5 * time.Second
@@ -31,6 +40,7 @@ const (
 )
 
 type catalog struct {
+	inner *kit.ModelCatalog
 	cache *verdictCache
 	quota *quotaProvider
 	// probes is shared by every discovery so overlapping ModelsForAuth calls
@@ -38,13 +48,76 @@ type catalog struct {
 	probes chan struct{}
 }
 
+// Catalog serving is delegated to a kit ModelCatalog: the catalog value
+// carries the plugin's probe state (verdict cache, quota recorder, shared
+// probe semaphore) in its Fetch/Validate hooks, and the kit owns the fresh
+// fetch, last-good store and namespace pipeline. A zero-value catalog uses
+// a process-wide default so the legacy (catalog{}) call shape keeps working.
+var defaultCatalog = newCatalog(nil)
+
 func newCatalog(q *quotaProvider) catalog {
-	return catalog{cache: newVerdictCache(), quota: q, probes: make(chan struct{}, probeConcurrency)}
+	c := catalog{cache: newVerdictCache(), quota: q, probes: make(chan struct{}, probeConcurrency)}
+	c.inner = kit.NewModelCatalog(c.modelCatalogConfig(nil))
+	return c
+}
+
+// modelCatalogConfig builds the production kit configuration for this catalog
+// value; fixture tests pass overrides so the Overrides plumbing is proven
+// without shipping any.
+func (c catalog) modelCatalogConfig(overrides map[string]kit.ModelOverride) kit.ModelCatalogConfig {
+	return kit.ModelCatalogConfig{
+		Namespace: modelNamespace,
+		Static:    staticModels(),
+		Fetch:     c.fetchModels,
+		Validate:  c.validateModels,
+		Overrides: overrides,
+	}
+}
+
+func (c catalog) innerOrDefault() *kit.ModelCatalog {
+	if c.inner != nil {
+		return c.inner
+	}
+	return defaultCatalog.inner
+}
+
+// The kit echoes the plugin's display-name metadata as Provider, but the
+// host keys registered models by that field: the provider id, not the display
+// name, must be stamped back onto every response.
+func (c catalog) RegisterModels(ctx context.Context, req pluginapi.ModelRegistrationRequest) (pluginapi.ModelRegistrationResponse, error) {
+	resp, err := c.innerOrDefault().RegisterModels(ctx, req)
+	resp.Provider = provider
+	return resp, err
+}
+func (c catalog) StaticModels(ctx context.Context, req pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
+	resp, err := c.innerOrDefault().StaticModels(ctx, req)
+	resp.Provider = provider
+	return resp, err
+}
+func (c catalog) ModelsForAuth(ctx context.Context, req pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
+	resp, err := c.innerOrDefault().ModelsForAuth(ctx, req)
+	resp.Provider = provider
+	return resp, err
 }
 
 // Fallback IDs are published chat models, not an entitlement/free-tier claim.
-// Wire/API references are recorded in docs/SOURCES.md. Fallbacks are validated
-// like discovered IDs before being advertised for an auth.
+// Wire/API references are recorded in docs/SOURCES.md. Static is trusted as
+// configured: like RegisterModels before the kit migration, the fallback
+// path serves it without probe validation.
+//
+// staticModels is the kit Static list: upstream (pre-namespace) form, which
+// the catalog pipeline serves prefixed.
+func staticModels() []pluginapi.ModelInfo {
+	return []pluginapi.ModelInfo{{
+		ID:          "stepfun-ai/step-5-preview",
+		Object:      "model",
+		OwnedBy:     provider,
+		DisplayName: "stepfun-ai/step-5-preview",
+	}}
+}
+
+// fallbackModels is the served (post-namespace) form of the static list,
+// kept for callers that already hold served ids.
 func fallbackModels() []pluginapi.ModelInfo {
 	ids := []string{"stepfun-ai/step-5-preview"}
 	out := make([]pluginapi.ModelInfo, 0, len(ids))
@@ -57,55 +130,54 @@ func modelInfo(id string) pluginapi.ModelInfo {
 	served := serveID(id)
 	return pluginapi.ModelInfo{ID: served, Object: "model", OwnedBy: provider, DisplayName: id}
 }
-func (catalog) RegisterModels(context.Context, pluginapi.ModelRegistrationRequest) (pluginapi.ModelRegistrationResponse, error) {
-	return pluginapi.ModelRegistrationResponse{Provider: provider, Models: fallbackModels()}, nil
-}
-func (catalog) StaticModels(context.Context, pluginapi.StaticModelRequest) (pluginapi.ModelResponse, error) {
-	return pluginapi.ModelResponse{Provider: provider, Models: fallbackModels()}, nil
-}
-func (c catalog) ModelsForAuth(ctx context.Context, r pluginapi.AuthModelRequest) (pluginapi.ModelResponse, error) {
-	key, err := authKey(r.StorageJSON, r.Metadata)
+
+// fetchModels is the kit Fetch hook: a single GET of the hosted catalog.
+// The kit turns any error into a last-good/static fallback, so failures are
+// reported, never masked here; Fetch itself never substitutes the fallback.
+func (c catalog) fetchModels(ctx context.Context, req pluginapi.AuthModelRequest) ([]pluginapi.ModelInfo, error) {
+	key, err := authKey(req.StorageJSON, req.Metadata)
 	if err != nil {
-		return pluginapi.ModelResponse{}, err
+		return nil, err
 	}
-	if r.HTTPClient == nil {
-		return pluginapi.ModelResponse{}, &pluginabi.Error{Code: "host_unavailable", Message: "model discovery requires the host HTTP client", HTTPStatus: 503}
+	if req.HTTPClient == nil {
+		return nil, &pluginabi.Error{Code: "host_unavailable", Message: "model discovery requires the host HTTP client", HTTPStatus: 503}
 	}
-	candidates, err := discover(ctx, r.HTTPClient, key)
-	if err != nil {
-		return pluginapi.ModelResponse{}, err
-	}
-	models, err := c.validate(ctx, r.HTTPClient, key, candidates)
-	if err != nil {
-		return pluginapi.ModelResponse{}, err
-	}
-	return pluginapi.ModelResponse{Provider: provider, Models: models}, nil
+	return fetchCatalog(ctx, req.HTTPClient, key)
 }
 
-// discover returns the upstream catalog, or the static fallback when the
-// catalog is unavailable or unusable. Credential/rate errors are surfaced.
-func discover(ctx context.Context, client pluginapi.HostHTTPClient, key string) ([]pluginapi.ModelInfo, error) {
+// fetchCatalog returns the upstream catalog in upstream (pre-namespace)
+// form. Credential/rate statuses map to classified errors; every other
+// failure (transport, malformed or oversized body, empty catalog) is a
+// fetch error. The kit owns the post-return parse-size bound via
+// kit.MaxModelsBody, checked here because custom fetches must enforce it.
+func fetchCatalog(ctx context.Context, client pluginapi.HostHTTPClient, key string) ([]pluginapi.ModelInfo, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	resp, err := client.Do(ctx, pluginapi.HTTPRequest{Method: http.MethodGet, URL: selectedBase(upstreamBase) + "/v1/models", Headers: http.Header{"Authorization": {"Bearer " + key}, "Accept": {"application/json"}}})
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if err != nil {
-		return fallbackModels(), nil
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		switch resp.StatusCode {
 		case 401, 402, 403, 429:
 			return nil, classifyResponse(resp)
 		}
-		return fallbackModels(), nil
+		return nil, rpcError("models_fetch_failed", "model discovery failed", resp.StatusCode)
+	}
+	if len(resp.Body) > kit.MaxModelsBody {
+		return nil, rpcError("models_fetch_failed", "model discovery response exceeds the size limit", 502)
 	}
 	var wire struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	if len(resp.Body) > 1<<20 || json.Unmarshal(resp.Body, &wire) != nil {
-		return fallbackModels(), nil
+	if json.Unmarshal(resp.Body, &wire) != nil {
+		return nil, rpcError("models_fetch_failed", "model discovery returned a malformed catalog", 502)
 	}
 	var out []pluginapi.ModelInfo
 	seen := make(map[string]bool)
@@ -117,39 +189,42 @@ func discover(ctx context.Context, client pluginapi.HostHTTPClient, key string) 
 			continue
 		}
 		seen[id] = true
-		out = append(out, modelInfo(id))
+		out = append(out, pluginapi.ModelInfo{ID: id, Object: "model", OwnedBy: provider, DisplayName: id})
 	}
 	if len(out) == 0 {
-		return fallbackModels(), nil
+		return nil, rpcError("models_fetch_failed", "model discovery returned no usable models", 502)
 	}
 	return out, nil
 }
 
-// validate drops candidates the gateway definitively rejects for this key and
-// keeps catalog order. Each probe is a real one-token chat dispatch, so it is
-// counted on the display-only quota card like any other request.
-func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, key string, candidates []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
+// validateModels is the kit Validate hook: it probes every candidate against
+// its own upstream id and drops only the definitively rejected ones, in
+// catalog order. A cancelled/expired validation context returns an error so
+// the kit falls back; unproven candidates are kept, never dropped.
+func (c catalog) validateModels(ctx context.Context, req pluginapi.AuthModelRequest, models []pluginapi.ModelInfo) ([]pluginapi.ModelInfo, error) {
+	key, err := authKey(req.StorageJSON, req.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	if req.HTTPClient == nil {
+		return nil, &pluginabi.Error{Code: "host_unavailable", Message: "model discovery requires the host HTTP client", HTTPStatus: 503}
+	}
 	budget, cancel := context.WithTimeout(ctx, discoveryBudget)
 	defer cancel()
 	cache := c.cache
 	tag := cache.tag(key)
-	alive := make([]bool, len(candidates))
+	alive := make([]bool, len(models))
 	sem := c.probes
 	if sem == nil {
 		sem = make(chan struct{}, probeConcurrency)
 	}
 	var wg sync.WaitGroup
-	for i, m := range candidates {
-		// Probes run against each candidate's own upstream id. Inverting
-		// the served id would probe two colliding candidates against the
-		// same first-registered upstream id and could hide a usable model
-		// behind a rejected namesake.
-		id, ok := candidateUpstream(m)
-		if !ok {
-			alive[i] = false
-			continue
-		}
-		if v, ok := cache.get(tag, id); ok {
+	for i, m := range models {
+		// Each candidate is probed against its own upstream id: two
+		// upstream ids can share one served id, and inverting the served
+		// id would probe both against the same first-registered upstream
+		// id, hiding a usable model behind a rejected namesake.
+		if v, ok := cache.get(tag, m.ID); ok {
 			alive[i] = v
 			continue
 		}
@@ -164,12 +239,12 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 			}
 			defer func() { <-sem }()
 			c.quota.record(key)
-			usable, definitive := probeModel(budget, client, key, id)
+			usable, definitive := probeModel(budget, req.HTTPClient, key, m.ID)
 			alive[i] = usable
 			if definitive {
-				cache.put(tag, id, usable, verdictTTL)
+				cache.put(tag, m.ID, usable, verdictTTL)
 			} else if budget.Err() == nil {
-				cache.put(tag, id, true, inconclusiveTTL)
+				cache.put(tag, m.ID, true, inconclusiveTTL)
 			}
 		}()
 	}
@@ -181,16 +256,21 @@ func (c catalog) validate(ctx context.Context, client pluginapi.HostHTTPClient, 
 	// only once. Keep the first surviving candidate in catalog order and
 	// point dispatch at it, so the advertised id routes to a probed-usable
 	// upstream id rather than to whichever namesake registered first.
-	out := make([]pluginapi.ModelInfo, 0, len(candidates))
+	out := make([]pluginapi.ModelInfo, 0, len(models))
 	emitted := make(map[string]bool)
-	for i, m := range candidates {
-		if !alive[i] || emitted[m.ID] {
+	for i, m := range models {
+		if !alive[i] {
 			continue
 		}
-		emitted[m.ID] = true
-		if id, ok := candidateUpstream(m); ok {
-			assignMapping(id, m.ID)
+		served := m.ID
+		if !strings.HasPrefix(served, modelPrefix) {
+			served = modelPrefix + served
 		}
+		if emitted[served] {
+			continue
+		}
+		emitted[served] = true
+		assignMapping(m.ID, served)
 		out = append(out, m)
 	}
 	return out, nil
@@ -284,4 +364,8 @@ func (c *verdictCache) put(tag uint64, id string, usable bool, ttl time.Duration
 		c.m[tag] = make(map[string]verdict)
 	}
 	c.m[tag][id] = verdict{usable: usable, expires: now.Add(ttl)}
+}
+
+func rpcError(code, message string, status int) error {
+	return &pluginabi.Error{Code: code, Message: message, HTTPStatus: status}
 }

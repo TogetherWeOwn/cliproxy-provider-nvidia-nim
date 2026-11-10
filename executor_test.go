@@ -232,13 +232,16 @@ func TestDiscoveryPrefixesDeduplicatesAndKeepsUpstreamNvidiaNamespace(t *testing
 	}
 }
 
-func TestDiscoveryFallbackForUnavailableOrInvalidCatalogButNotAuthErrors(t *testing.T) {
+// Kit masks fetch failures — including credential/rate statuses and an
+// absent host client — behind the last-good/static fallback instead of
+// propagating them from ModelsForAuth. Credential errors still classify on
+// the executor path, where the request is actually dispatched.
+func TestDiscoveryFallbackForUnavailableOrInvalidCatalog(t *testing.T) {
 	for _, tc := range []struct {
-		status  int
-		body    string
-		wantErr bool
+		status int
+		body   string
 	}{
-		{503, `{}`, false}, {404, `{}`, false}, {200, `not-json`, false}, {200, `{"data":[]}`, false}, {200, `{"data":null}`, false}, {401, `{}`, true}, {403, `{}`, true}, {429, `{}`, true},
+		{503, `{}`}, {404, `{}`}, {200, `not-json`}, {200, `{"data":[]}`}, {200, `{"data":null}`}, {401, `{}`}, {403, `{}`}, {429, `{}`},
 	} {
 		t.Run(fmt.Sprint(tc.status)+tc.body, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -250,10 +253,30 @@ func TestDiscoveryFallbackForUnavailableOrInvalidCatalogButNotAuthErrors(t *test
 				io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
-			out, err := (catalog{}).ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
-			if (err != nil) != tc.wantErr || !tc.wantErr && len(out.Models) == 0 {
-				t.Fatalf("fallback %+v %v", out, err)
+			// Fresh catalog per case: the default catalog's durable
+			// last-good would otherwise serve instead of the static list.
+			out, err := newCatalog(nil).ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
+			if err != nil {
+				t.Fatalf("fetch failure must fall back, not error: %+v %v", out, err)
+			}
+			if got := ids(out.Models); got != "nvidia/stepfun-ai/step-5-preview" {
+				t.Fatalf("fallback served %q, want the static list", got)
 			}
 		})
 	}
+
+	t.Run("no-host-transport", func(t *testing.T) {
+		// Zero-value catalog on a credential with no last-good yet.
+		out, err := (catalog{}).ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-fallback-notransport"}`)})
+		if err != nil || ids(out.Models) != "nvidia/stepfun-ai/step-5-preview" {
+			t.Fatalf("missing host transport %+v %v", out, err)
+		}
+	})
+
+	t.Run("invalid-key-shape", func(t *testing.T) {
+		out, err := (catalog{}).ModelsForAuth(context.Background(), pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"not-a-nvidia-key"}`)})
+		if err != nil || ids(out.Models) != "nvidia/stepfun-ai/step-5-preview" {
+			t.Fatalf("invalid key %+v %v", out, err)
+		}
+	})
 }

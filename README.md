@@ -3,7 +3,7 @@
 First-class NVIDIA API-key auth files, namespaced OpenAI-compatible chat models,
 incremental streaming and **display-only local requests-per-minute quota cards**.
 Uses [`cliproxy-provider-kit`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
-at release `v0.4.1`
+at release `v0.5.0`
 and is tested against the original **CLIProxyAPI v8.0.49 C-ABI host** (ABI 1 /
 RPC schema 10). Requires CLIProxyAPI v8.0.49 or newer: the kit answers schema 10
 and refuses hosts older than schema 10. The plugin declares no multi-auth
@@ -98,17 +98,34 @@ and then **validates every candidate** with a one-token streaming chat probe
 - 2xx other than 202: usable. Any other outcome (202 pending, 429, 5xx,
   timeout, transport error) is inconclusive and the model is kept, so a
   transient upstream problem never empties the catalog.
-- At most 8 probes run at once across all discoveries, each bounded to 5 s, the whole validation to
-  30 s. Definitive verdicts are cached per key for 6 h and inconclusive
-  ones for 15 min, so host client reloads do not re-probe the catalog.
+- At most 8 probes run at once across all discoveries, each bounded to 5 s, and
+  the whole validation to the kit's 15 s fetch deadline (an earlier caller
+  deadline wins). Definitive verdicts are cached per key for 6 h and
+  inconclusive ones for 15 min, so host client reloads do not re-probe the
+  catalog.
 - Each probe is a real dispatch and is counted on the local RPM card. A full
   first discovery can therefore use most of a 40 RPM minute.
 
-The static registrar supplies the fallback model above. Discovery falls back to
-it (and validates it) on transport/server/missing catalog errors,
-malformed/oversized (>1 MiB) JSON, or no usable returned models. It propagates
-401/402/403/429 and cancellation rather than hiding auth/quota failures behind a
-healthy catalog. Discovery requires host transport.
+Model serving runs through the kit
+[`ModelCatalog`](https://github.com/TogetherWeOwn/cliproxy-provider-kit)
+(`Namespace: nvidia`, `Static:` the fallback model, a custom `Fetch`, and
+the probe validation as `Validate`; no `Overrides` or allow/deny globs — the
+plugin has none): the plugin supplies the fetch and probe validation, the kit
+owns the fresh fetch, the durable per-credential last-good store, and the
+namespace pipeline. The static registrar supplies the fallback
+model above, served as configured (trusted, not probe-validated) whenever
+there is no usable fresh or last-good list. Every `ModelsForAuth` call
+attempts one fresh fetch; any fetch or validation failure — transport/server
+errors, missing catalog, malformed or oversized (>1 MiB) JSON, an empty or
+all-rejected list, 401/402/403/429, a cancelled validation context, or an
+absent host client — falls back to that credential's last-good list and then
+to the static list **without error**. Only an already-cancelled context or a
+failure with nothing to fall back to surfaces an error, so
+credential/rate failures may be masked by a healthy-looking catalog here; the
+executor still classifies each dispatched request. The kit performs a single
+fetch per call with no bounded retry: failure-then-recovery is observed only
+when a later invocation fetches successfully again — Timeline-B recovery is
+documented, never guaranteed.
 
 Execution sends `POST https://integrate.api.nvidia.com/v1/chat/completions`,
 `Authorization: Bearer <api-key>` and JSON via the **injected host HTTP client**;
