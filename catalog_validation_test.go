@@ -133,10 +133,17 @@ func TestVerdictCacheExpires(t *testing.T) {
 // keeps the not-yet-rejected candidates — a timeout is an unknown outcome,
 // not a rejection — and the call still returns bounded.
 func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
+	// probeStarted is signalled by the first probe so cancellation cannot
+	// land before validation begins.
+	probeStarted := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
 			io.WriteString(w, `{"data":[{"id":"slow/a"},{"id":"slow/b"}]}`)
 			return
+		}
+		select {
+		case probeStarted <- struct{}{}:
+		default:
 		}
 		io.Copy(io.Discard, r.Body) // lets the server observe the client hanging up
 		<-r.Context().Done()
@@ -152,7 +159,7 @@ func TestModelsForAuthHonoursCancellationDuringValidation(t *testing.T) {
 
 	mid, cancelMid := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(100 * time.Millisecond)
+		<-probeStarted
 		cancelMid()
 	}()
 	out, err := newCatalog(nil).ModelsForAuth(mid, req)

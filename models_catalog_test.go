@@ -27,12 +27,13 @@ type fixtureReply struct {
 }
 
 type fixtureUpstream struct {
-	mu          sync.Mutex
-	defaultMode fixtureReply
-	byKey       map[string]fixtureReply
-	blockModels bool
-	blockProbes bool
-	rejectProbe map[string]int // probe model id → status (default 200)
+	mu            sync.Mutex
+	defaultMode   fixtureReply
+	byKey         map[string]fixtureReply
+	blockModels   bool
+	blockProbes   bool
+	modelsStarted chan struct{} // signalled when /v1/models starts blocking
+	rejectProbe   map[string]int // probe model id → status (default 200)
 }
 
 func (f *fixtureUpstream) set(status int, body string) {
@@ -73,9 +74,13 @@ func (f *fixtureUpstream) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
-	def, byKey, block := f.defaultMode, f.byKey, f.blockModels
+	def, byKey, block, started := f.defaultMode, f.byKey, f.blockModels, f.modelsStarted
 	f.mu.Unlock()
 	if block {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
 		<-r.Context().Done()
 		return
 	}
@@ -353,11 +358,12 @@ func TestCatalogFixtureCancellationAndDeadline(t *testing.T) {
 	})
 
 	t.Run("mid-flight cancellation falls back", func(t *testing.T) {
-		up := &fixtureUpstream{blockModels: true}
+		started := make(chan struct{})
+		up := &fixtureUpstream{blockModels: true, modelsStarted: started}
 		server := fixtureServer(t, up)
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			<-started
 			cancel()
 		}()
 		start := time.Now()
