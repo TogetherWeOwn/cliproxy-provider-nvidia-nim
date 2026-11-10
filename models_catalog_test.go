@@ -32,7 +32,7 @@ type fixtureUpstream struct {
 	byKey         map[string]fixtureReply
 	blockModels   bool
 	blockProbes   bool
-	modelsStarted chan struct{} // signalled when /v1/models starts blocking
+	modelsStarted chan struct{}  // signalled when /v1/models starts blocking
 	rejectProbe   map[string]int // probe model id → status (default 200)
 }
 
