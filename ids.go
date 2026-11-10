@@ -55,20 +55,9 @@ func assignMapping(upstream, served string) {
 	upstreamByServed.m[served] = upstream
 }
 
-// candidateUpstream resolves the upstream id to probe for one discovery
-// candidate. DisplayName carries the candidate's own upstream id, so each
-// candidate is probed against itself even when two upstream ids share one
-// served id; the registry heuristic stays only as the fail-closed fallback
-// for candidates the plugin never registered.
-func candidateUpstream(m pluginapi.ModelInfo) (string, bool) {
-	if display := strings.TrimSpace(m.DisplayName); display != "" && serveID(display) == m.ID {
-		return display, true
-	}
-	return upstreamID(m.ID)
-}
-
-// upstreamID inverts serveID for dispatch. Probing uses candidateUpstream so
-// each discovery candidate is validated against its own upstream id. A served id that only
+// upstreamID inverts serveID for dispatch. Discovery validation probes each
+// candidate against its own upstream id (no inversion), and only dispatch
+// needs the served→upstream mapping. A served id that only
 // gained its namespace from the prefix maps back by trimming once; a served
 // id that already carried it (NVIDIA-owned "nvidia/…" ids, which have no
 // second segment after the prefix) maps to itself. Nested NVIDIA-owned ids

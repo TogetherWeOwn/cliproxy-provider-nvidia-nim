@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"sync"
 	"testing"
@@ -99,6 +100,53 @@ func TestQuotaCapacityDefaultAndOverride(t *testing.T) {
 	out, err = q.FetchQuota(context.Background(), r)
 	if err != nil || out.Groups[0].Buckets[0].RemainingFraction != .5 {
 		t.Fatalf("metadata precedence %+v %v", out, err)
+	}
+}
+
+func TestQuotaHMACKeyingSharingIsolationAndFreshKeyPerInstance(t *testing.T) {
+	q := newQuotaProvider()
+	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	q.now = func() time.Time { return now }
+	// Duplicate/reloaded auth entries with the same key share one window
+	// even under different host AuthIDs.
+	first := quotaRequest("nvapi-shared", 4)
+	first.AuthID = "file-a"
+	second := quotaRequest("nvapi-shared", 4)
+	second.AuthID = "file-b-renamed"
+	q.record("nvapi-shared")
+	requireQuota(t, q, first, .75, "2030-01-01T00:01:00Z")
+	requireQuota(t, q, second, .75, "2030-01-01T00:01:00Z")
+	// A different key never shares.
+	requireQuota(t, q, quotaRequest("nvapi-unrelated", 4), 1, "")
+	// A blank key creates no bucket and never pools anonymous traffic.
+	q.record("")
+	if len(q.recent) != 1 {
+		t.Fatalf("blank or unrelated key pooled entries: %d buckets", len(q.recent))
+	}
+	// A fresh provider (new per-process HMAC key) does not see this window.
+	fresh := newQuotaProvider()
+	fresh.now = func() time.Time { return now }
+	requireQuota(t, fresh, quotaRequest("nvapi-shared", 4), 1, "")
+	// Buckets are keyed HMACs, so the raw key is not recoverable from the
+	// stored bucket alone by an unsalted hash: bucket() differs from the
+	// plain SHA-256 digest of the same key.
+	digest, ok := q.bucket("nvapi-shared")
+	if !ok {
+		t.Fatal("bucket unavailable with a valid macKey")
+	}
+	if digest == sha256.Sum256([]byte("nvapi-shared")) {
+		t.Fatal("bucket equals the plain SHA-256 digest of the key")
+	}
+}
+
+func TestQuotaFailClosedWithoutEntropy(t *testing.T) {
+	q := &quotaProvider{recent: make(map[[32]byte][]time.Time), now: time.Now}
+	q.record("nvapi-shared")
+	if len(q.recent) != 0 {
+		t.Fatal("record stored under an unkeyed provider")
+	}
+	if _, err := q.FetchQuota(context.Background(), quotaRequest("nvapi-shared", 4)); err == nil {
+		t.Fatal("FetchQuota succeeded without a keyed bucket")
 	}
 }
 

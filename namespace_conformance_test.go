@@ -33,14 +33,22 @@ func TestModelNamespaceConformance(t *testing.T) {
 	all = append(all, static.Models...)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" { // validation probe: every model usable
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
 		io.WriteString(w, `{"data":[{"id":"openai/gpt-oss-20b"},{"id":"meta/llama-3.1-8b-instruct"},{"id":"nvidia/llama-3.3-nemotron-super-49b-v1.5"}]}`)
 	}))
 	defer server.Close()
-	discovered, err := discover(ctx, mockHostClient{server}, "nvapi-example")
+	// Discovery now runs through the kit catalog: raw fetch results are
+	// pre-namespace upstream ids, so conformance is asserted on the served
+	// ModelsForAuth response instead of the fetch output.
+	out, err := c.ModelsForAuth(ctx, pluginapi.AuthModelRequest{StorageJSON: []byte(`{"api_key":"nvapi-example"}`), HTTPClient: mockHostClient{server}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	all = append(all, discovered...)
+	all = append(all, out.Models...)
 
 	if len(all) == 0 {
 		t.Fatal("no models to check")
