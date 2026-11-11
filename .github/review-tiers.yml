@@ -1,0 +1,50 @@
+# The highest changed-file tier wins; sensitive wins overlaps. Unmatched and
+# new paths are sensitive. This map is always sensitive.
+#
+# Content always escalates to sensitive regardless of path: new or changed
+# public endpoints or input parsing; auth, authz, sessions, crypto or keys;
+# secrets, credentials, permission checks, tenant isolation or personal data;
+# SQL, schema or migrations; dependencies or lockfiles (including dev deps);
+# CI or workflows; weakened assertions, deleted tests or snapshots, or lower
+# test gates. Low test entries, if ever added, are additive-only and never
+# exempt test weakening from escalation.
+#
+# Low and ordinary changes receive QA; sensitive, unclassified or escalated
+# changes receive Security then QA. QA verifies the author's risk attestation.
+# Sensitive-floor paths cannot be downgraded without Security approval.
+version: 1
+default_tier: sensitive
+
+tiers:
+  # The license is static prose, not runtime or security configuration.
+  low:
+    - LICENSE
+  # No runtime module has been justified as free of trust-boundary effects.
+  ordinary: []
+  sensitive:
+    - .github/**
+    - CODEOWNERS
+    - "**/CODEOWNERS"
+    - AGENTS.md
+    - CLAUDE.md
+    - .claude/**
+    - skills/**
+    - "**/AGENTS.md"
+    - "**/CLAUDE.md"
+    - "**/SKILL.md"
+    - "**/.claude/**"
+    - "**/skills/**"
+    # Go manifests, runtime, network, auth and tests; host compatibility.
+    - go.mod
+    - go.sum
+    - "**/go.mod"
+    - "**/go.sum"
+    - "*.go"
+    - integration/**
+    # Packaging, install and release surfaces, including provider metadata.
+    - scripts/**
+    - registry.json
+    - Makefile
+    - "**/Makefile"
+    - Dockerfile
+    - "**/Dockerfile*"
